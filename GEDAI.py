@@ -54,6 +54,7 @@ def batch_gedai(
             chanlabels=chanlabels,
             device=device,
             dtype=dtype,
+            skip_checks_and_return_cleaned_only=True,
         ),
         in_dims=0, # only eeg_batch is batched
         out_dims=0,
@@ -72,6 +73,7 @@ def gedai(
     chanlabels: Optional[List[str]] = None,
     device: Union[str, torch.device] = "cpu",
     dtype: torch.dtype = torch.float64,
+    skip_checks_and_return_cleaned_only: bool = False,
 ) -> Dict[str, Any]:
     """Run the GEDAI cleaning pipeline on raw or preprocessed EEG.
 
@@ -85,6 +87,8 @@ def gedai(
     - wavelet_levels / matlab_levels: level selection for MODWT analysis.
     - chanlabels: optional channel label list for leadfield mapping.
     - device / dtype: torch device and dtype for computation.
+    - skip_checks_and_return_cleaned_only: if True, skips input validation
+      and returns only the cleaned EEG tensor.
 
     The function returns a dictionary containing cleaned data,
     estimated artifacts, per-band sensai scores and thresholds, the
@@ -103,20 +107,22 @@ def gedai(
     n_ch, n_samp = eeg_t.shape
     epoch_size_used = _ensure_even_epoch_size(float(epoch_size), float(sfreq))
 
-    if isinstance(leadfield, (np.ndarray, torch.Tensor)):
-        leadfield_t = torch.as_tensor(leadfield, device=device, dtype=dtype)
-    elif isinstance(leadfield, str):
-        loaded = np.load(leadfield)
-        leadfield_t = torch.as_tensor(loaded, device=device, dtype=dtype)
-    else:
-        raise ValueError("leadfield must be ndarray, path string, tensor.")
+    if not skip_checks_and_return_cleaned_only: # already checked, increase efficiency
+        if isinstance(leadfield, (np.ndarray, torch.Tensor)):
+            leadfield_t = torch.as_tensor(leadfield, device=device, dtype=dtype)
+        elif isinstance(leadfield, str):
+            loaded = np.load(leadfield)
+            leadfield_t = torch.as_tensor(loaded, device=device, dtype=dtype)
+        else:
+            raise ValueError("leadfield must be ndarray, path string, tensor.")
 
-    if leadfield_t.shape != (n_ch, n_ch):
-            raise ValueError(
-                f"leadfield covariance must be ({n_ch}, {n_ch}), got {leadfield_t.shape}."
-            )
-    
-    refCOV = leadfield_t
+        if leadfield_t.shape != (n_ch, n_ch):
+                raise ValueError(
+                    f"leadfield covariance must be ({n_ch}, {n_ch}), got {leadfield_t.shape}."
+                )
+        refCOV = leadfield_t
+    else:
+        refCOV = leadfield
 
     # apply non-rank-deficient average reference
     eeg_ref = _non_rank_deficient_avg_ref(eeg_t.to(device=device))
@@ -132,11 +138,13 @@ def gedai(
     # compute MODWT coefficients and validate perfect reconstruction
     J = (2 ** int(matlab_levels) + 1) if (matlab_levels is not None) else int(wavelet_levels)
     coeffs = _modwt_haar(cleaned_broadband, J)
-    xrec = _imodwt_haar(coeffs[:-1], coeffs[-1])
-    assert torch.allclose(xrec, cleaned_broadband, rtol=1e-10, atol=1e-12), "MODWT inverse failed PR"
+    if skip_checks_and_return_cleaned_only:
+        xrec = _imodwt_haar(coeffs[:-1], coeffs[-1])
+        assert torch.allclose(xrec, cleaned_broadband, rtol=1e-10, atol=1e-12), "MODWT inverse failed PR"
 
     bands = _modwtmra_haar(coeffs)
-    assert torch.allclose(bands.sum(dim=0), cleaned_broadband, rtol=1e-10, atol=1e-12), "MRA additivity failed"
+    if skip_checks_and_return_cleaned_only:
+        assert torch.allclose(bands.sum(dim=0), cleaned_broadband, rtol=1e-10, atol=1e-12), "MRA additivity failed"
 
     # exclude lowest-frequency bands based on sampling rate
     exclude = int(torch.ceil(torch.tensor(600.0 / float(sfreq))).item())
@@ -144,6 +152,9 @@ def gedai(
 
     if keep_upto <= 0:
         cleaned = cleaned_broadband
+        if skip_checks_and_return_cleaned_only:
+            return cleaned
+        
         artifacts = eeg_ref[:, :cleaned.shape[1]] - cleaned
         try:
             sensai_score = float(
@@ -179,6 +190,9 @@ def gedai(
         thresholds.append(float(thr_band))
 
     cleaned = filt.sum(dim=0)
+    if skip_checks_and_return_cleaned_only:
+        return cleaned
+    
     artifacts = eeg_ref[:, :cleaned.shape[1]] - cleaned
 
     try:
