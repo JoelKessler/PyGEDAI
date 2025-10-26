@@ -18,6 +18,48 @@ import torch
 from auxiliaries.GEDAI_per_band import gedai_per_band
 from auxiliaries.SENSAI_basic import sensai_basic
 
+from torch.func import vmap
+
+def batch_gedai(
+    eeg_batch: torch.Tensor,
+    sfreq: float,
+    denoising_strength: str = "auto",
+    epoch_size: float = 1.0,
+    leadfield: torch.Tensor = None,
+    *,
+    wavelet_levels: Optional[int] = 9,
+    matlab_levels: Optional[int] = None,
+    chanlabels: Optional[List[str]] = None,
+    device: Union[str, torch.device] = "cpu",
+    dtype: torch.dtype = torch.float64,
+):
+    """
+    Vectorized version of gedai over the batch dimension using torch.func.vmap.
+    """
+    if eeg_batch.ndim != 3:
+        raise ValueError("eeg_batch must be 3D (batch_size, n_channels, n_samples).")
+    if leadfield is None or leadfield.shape != (eeg_batch.shape[1], eeg_batch.shape[1]):
+        raise ValueError("leadfield must be provided with shape (n_channels, n_channels).")
+
+    # Single-sample call, parameterized by per-sample leadfield lf
+    return vmap(
+        lambda eeg: gedai(
+            eeg, # [C, N]
+            sfreq,
+            denoising_strength=denoising_strength,
+            epoch_size=epoch_size,
+            leadfield=leadfield,
+            wavelet_levels=wavelet_levels,
+            matlab_levels=matlab_levels,
+            chanlabels=chanlabels,
+            device=device,
+            dtype=dtype,
+        ),
+        in_dims=0, # only eeg_batch is batched
+        out_dims=0,
+        randomness="error",
+    )(eeg_batch)
+
 def gedai(
     eeg: Union[np.ndarray, torch.Tensor],
     sfreq: float,
@@ -156,24 +198,6 @@ def gedai(
         epoch_size_used=float(epoch_size_used),
         refCOV=refCOV,
     )
-
-def _to_torch(x, device, dtype=torch.float64):
-    """Convert an array-like object to a torch tensor on `device`.
-
-    If `x` is already a tensor, return a copy moved to the target
-    device and dtype. Otherwise create a tensor with the requested
-    device and dtype.
-    """
-    if torch.is_tensor(x):
-        return x.to(device=device, dtype=dtype)
-    return torch.as_tensor(x, device=device, dtype=dtype)
-
-def _to_numpy(x: torch.Tensor) -> np.ndarray:
-    """Return a CPU numpy array detached from the computation graph.
-
-    This is used when passing data to helpers that expect numpy inputs.
-    """
-    return x.detach().cpu().numpy()
 
 def _complex_dtype_for(dtype: torch.dtype) -> torch.dtype:
     """Return a complex dtype matching the provided real dtype.
