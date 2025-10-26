@@ -10,7 +10,7 @@ def _cov_matlab_like(X: torch.Tensor, ddof: int = 1) -> torch.Tensor:
     unbiased (ddof=1), Hermitian-symmetrized for stability.
     """
     X = X.to(torch.float64)
-    C, S = X.shape
+    S = X.size(1)
     if S <= ddof:
         raise ValueError(f"n_samples ({S}) must be > ddof ({ddof})")
     Xm = X - X.mean(dim=1, keepdim=True)
@@ -74,7 +74,7 @@ def sensai(
         dtype=dtype,
     )
 
-    num_chans = int(refCOV.shape[0])
+    num_chans = refCOV.size(0)
     epoch_samples = int(round(float(srate) * float(epoch_size)))
     top_PCs_eff = min(int(top_PCs), num_chans)
 
@@ -84,10 +84,10 @@ def sensai(
     VT = VT[:, idxT][:, :top_PCs_eff]
 
     # Reshape to epochs like NumPy order='F'
-    if EEGout_data.shape[0] != num_chans or EEG_artifacts_data.shape[0] != num_chans:
+    if EEGout_data.size(0) != num_chans or EEG_artifacts_data.size(0) != num_chans:
         raise ValueError("EEGout/artifacts channel dimension mismatch with refCOV.")
 
-    total_samples = int(EEGout_data.shape[1])
+    total_samples = EEGout_data.size(1)
     if total_samples % epoch_samples != 0:
         raise ValueError("Total samples are not divisible by epoch size.")
     num_epochs = total_samples // epoch_samples

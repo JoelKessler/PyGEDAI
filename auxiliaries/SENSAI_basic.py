@@ -16,7 +16,7 @@ def _cov_matlab_like(X: torch.Tensor, ddof: int = 1) -> torch.Tensor:
         Covariance matrix.
     """
     X = X.to(torch.float64)
-    C, S = X.shape
+    S = X.size(1)
     if S <= ddof:
         raise ValueError(f"n_samples ({S}) must be > ddof ({ddof})")
     Xc = X - X.mean(dim=1, keepdim=True)
@@ -88,20 +88,20 @@ def sensai_basic(
     # Validate input dimensions
     if signal_data.ndim != 2 or noise_data.ndim != 2:
         raise ValueError("signal_data and noise_data must be (num_chans, total_samples).")
-    if signal_data.shape[0] != refCOV.shape[0] or noise_data.shape[0] != refCOV.shape[0]:
+    if signal_data.size(0) != refCOV.size(0) or noise_data.size(0) != refCOV.size(0):
         raise ValueError("signal/noise first dim must match refCOV rows (num_chans).")
 
-    num_chans = int(refCOV.shape[0])
+    num_chans = refCOV.size(0)
 
     # Check epoch length
     ep_len = float(srate) * float(epoch_size)
     if abs(ep_len - round(ep_len)) > 1e-9:
         raise ValueError("srate*epoch_size must be an integer number of samples.")
     S = int(round(ep_len))
-    if signal_data.shape[1] % S != 0 or noise_data.shape[1] % S != 0:
+    if signal_data.size(1) % S != 0 or noise_data.size(1) % S != 0:
         raise ValueError("Total samples must be divisible by epoch_samples.")
-    E_sig = signal_data.shape[1] // S
-    E_noi = noise_data.shape[1] // S
+    E_sig = signal_data.size(1) // S
+    E_noi = noise_data.size(1) // S
     if E_sig != E_noi:
         raise ValueError("signal and noise must have the same number of epochs.")
     E = E_sig

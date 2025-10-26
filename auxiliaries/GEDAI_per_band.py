@@ -30,7 +30,8 @@ def gedai_per_band(
     if X.ndim != 2:
         raise ValueError("Input EEG data must be a 2D matrix (channels x samples).")
     refCOV_t = refCOV.to(device=device, dtype=dtype)
-    n_ch, pnts = X.shape
+    n_ch = X.size(0)
+    pnts = X.size(1)
 
     # Epoching: require integer/even epoch_samples
     epoch_samples_float = float(srate) * float(epoch_size)
@@ -56,19 +57,18 @@ def gedai_per_band(
         EEGdata_epoched = torch.zeros((n_ch, epoch_samples, 0), device=device, dtype=dtype)
 
     # Stream 2: shifted epochs
-    if shifting == 0 or X.shape[1] <= 2 * shifting:
+    if shifting == 0 or X.size(1) <= 2 * shifting:
         EEGdata_epoched_2 = torch.zeros((n_ch, epoch_samples, 0), device=device, dtype=dtype)
     else:
         X2 = X[:, shifting:-shifting]
-        nE2 = int(X2.shape[1] // epoch_samples)
+        nE2 = int(X2.size(1) // epoch_samples)
         X2 = X2[:, : nE2 * epoch_samples]
         if nE2 > 0:
             EEGdata_epoched_2 = X2.unfold(1, epoch_samples, epoch_samples).permute(0, 2, 1).contiguous()
         else:
             EEGdata_epoched_2 = torch.zeros((n_ch, epoch_samples, 0), device=device, dtype=dtype)
 
-    _, _, N_epochs = EEGdata_epoched.shape
-
+    N_epochs = EEGdata_epoched.size(2)
     # Covariances (per epoch)
     COV = torch.zeros((n_ch, n_ch, N_epochs), device=device, dtype=dtype)
     COV_2 = torch.zeros((n_ch, n_ch, max(N_epochs - 1, 0)), device=device, dtype=dtype)
@@ -77,7 +77,7 @@ def gedai_per_band(
         X1 = EEGdata_epoched[:, :, epo]
         COV[:, :, epo] = _matlab_cov(X1, ddof=1)
 
-        if EEGdata_epoched_2.shape[2] > epo:
+        if EEGdata_epoched_2.size(2) > epo:
             X2e = EEGdata_epoched_2[:, :, epo]
             COV_2[:, :, epo] = _matlab_cov(X2e, ddof=1)
 
@@ -111,7 +111,7 @@ def gedai_per_band(
         Evec[:, :, i] = Vi[:, idx]
         Eval[:, :, i] = torch.diag(w[idx])
 
-        if EEGdata_epoched_2.shape[2] > i:
+        if EEGdata_epoched_2.size(2) > i:
             Vi2, Di2 = _gevd_chol(COV_2[:, :, i], refCOV_reg)
             w2 = torch.diag(Di2)
             idx2 = torch.argsort(w2)
@@ -201,7 +201,7 @@ def gedai_per_band(
 
     # Combine streams with cosine weights
     cosine_weights = create_cosine_weights(n_ch, srate, epoch_size, True, device=device, dtype=dtype)
-    size_reconstructed_2 = cleaned_data_2.shape[1]
+    size_reconstructed_2 = cleaned_data_2.size(1)
     sample_end = size_reconstructed_2 - shifting
 
     if size_reconstructed_2 > 0 and shifting > 0:
@@ -263,7 +263,7 @@ def _matlab_cov(X: torch.Tensor, ddof: int = 1) -> torch.Tensor:
     MATLAB-like covariance for X (n_features, n_samples).
     """
     X = X.to(dtype=torch.float64)
-    n_features, n_samples = X.shape
+    n_samples = X.size(1)
     if n_samples <= ddof:
         raise ValueError(f"n_samples ({n_samples}) must be > ddof ({ddof})")
 

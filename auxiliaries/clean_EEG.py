@@ -50,15 +50,15 @@ def clean_eeg(
     if Ev.ndim != 3 or U.ndim != 3:
         raise ValueError("Eval and Evec must be 3D arrays of shape (num_chans, num_chans, num_epochs)")
 
-    num_chans = Ev.shape[0]
-    if Ev.shape[1] != num_chans or U.shape[:2] != (num_chans, num_chans):
+    num_chans = Ev.size(0)
+    if Ev.size(1) != num_chans or U.size(0) != num_chans or U.size(1) != num_chans:
         raise ValueError("Eval and Evec must be (num_chans, num_chans, num_epochs)")
 
-    if EEG.shape[0] != num_chans:
+    if EEG.size(0) != num_chans:
         raise ValueError("Channel count mismatch between EEGdata_epoched and Eval/Evec")
 
-    num_epochs = Ev.shape[2]
-    if U.shape[2] != num_epochs or EEG.shape[2] != num_epochs:
+    num_epochs = Ev.size(2)
+    if U.size(2) != num_epochs or EEG.size(2) != num_epochs:
         raise ValueError("num_epochs must match across EEGdata_epoched, Eval, and Evec")
 
     if num_epochs == 0:
@@ -101,7 +101,7 @@ def clean_eeg(
         threshold_cutoff = 0.0
 
     # Prepare buffers for cleaned data and artifacts
-    epoch_samples = EEG.shape[1]
+    epoch_samples = EEG.size(1)
     if strict_matlab and (epoch_samples % 2 != 0):
         raise ValueError("epoch_samples must be even to match MATLAB indexing.")
     half_epoch = epoch_samples // 2
@@ -110,7 +110,7 @@ def clean_eeg(
     cw = create_cosine_weights(num_chans, srate, epoch_size, True)
     # Ensure cosine weights are on the correct device and dtype
     cw = cw.to(device=device, dtype=rtype)
-    if cw.shape != (num_chans, epoch_samples):
+    if cw.ndim != 2 or cw.size(0) != num_chans or cw.size(1) != epoch_samples:
         raise ValueError(f"cosine_weights shape {tuple(cw.shape)} != ({num_chans}, {epoch_samples})")
 
     artifacts = torch.zeros_like(EEG, dtype=ctype, device=device)

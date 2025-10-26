@@ -44,8 +44,8 @@ def gedai_non_rank_deficient_avg_ref(eeg: EEGLike) -> EEGLike:
     """
     if eeg.data.ndim < 2:
         raise ValueError("EEG.data must be at least 2D (channels x ...).")
-    if eeg.data.shape[0] != eeg.nbchan:
-        raise ValueError(f"eeg.nbchan ({eeg.nbchan}) must equal eeg.data.shape[0] ({eeg.data.shape[0]}).")
+    if eeg.data.size(0) != eeg.nbchan:
+        raise ValueError(f"eeg.nbchan ({eeg.nbchan}) must equal eeg.data.shape[0] ({eeg.data.size(0)}).")
 
     data64 = eeg.data.to(dtype=torch.float64)
 

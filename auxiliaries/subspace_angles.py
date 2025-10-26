@@ -18,7 +18,7 @@ def subspace_angles(A: torch.Tensor, B: torch.Tensor) -> torch.Tensor:
     - The function assumes that the columns of A and B are orthonormal.
     - The computation is performed in float64 or complex128 precision for numerical stability.
     """
-    if A.shape[0] != B.shape[0]:
+    if A.size(0) != B.size(0):
         raise ValueError("A and B must have the same number of rows (ambient dimension).")
 
     # Promote dtype to ensure MATLAB-like behavior for complex inputs

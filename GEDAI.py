@@ -14,11 +14,10 @@ from __future__ import annotations
 from typing import Union, Dict, Any, Optional, List
 import numpy as np
 import torch
+import math
 
 from auxiliaries.GEDAI_per_band import gedai_per_band
 from auxiliaries.SENSAI_basic import sensai_basic
-
-from torch.func import vmap
 
 def batch_gedai(
     eeg_batch: torch.Tensor,
@@ -56,11 +55,11 @@ def batch_gedai(
     return torch.stack(results, dim=0)
 
 def gedai(
-    eeg: Union[np.ndarray, torch.Tensor],
+    eeg: torch.Tensor,
     sfreq: float,
     denoising_strength: str = "auto",
     epoch_size: float = 1.0,
-    leadfield: Union[str, np.ndarray, torch.Tensor] = None,
+    leadfield: Union[str, torch.Tensor] = None,
     *,
     wavelet_levels: Optional[int] = 9,
     matlab_levels: Optional[int] = None,
@@ -68,7 +67,7 @@ def gedai(
     device: Union[str, torch.device] = "cpu",
     dtype: torch.dtype = torch.float64,
     skip_checks_and_return_cleaned_only: bool = False,
-) -> Dict[str, Any]:
+) -> Union[Dict[str, Any], torch.Tensor]:
     """Run the GEDAI cleaning pipeline on raw or preprocessed EEG.
 
     Parameters
@@ -90,36 +89,39 @@ def gedai(
     """
     if eeg is None:
         raise ValueError("eeg must be provided.")
-    eeg_t = torch.as_tensor(eeg, device=device, dtype=dtype)
-    if eeg_t.ndim != 2:
+    if eeg.ndim != 2:
         raise ValueError("eeg must be 2D (n_channels, n_samples).")
     if leadfield is None:
         raise ValueError("leadfield is required.")
     if chanlabels is not None:
         raise NotImplementedError("chanlabels handling not implemented yet.")
     
-    n_ch, n_samp = eeg_t.shape
+    eeg = eeg.to(device=device, dtype=dtype)
+    n_ch = int(eeg.size(0))
     epoch_size_used = _ensure_even_epoch_size(float(epoch_size), float(sfreq))
 
     if not skip_checks_and_return_cleaned_only: # already checked, increase efficiency
-        if isinstance(leadfield, (np.ndarray, torch.Tensor)):
-            leadfield_t = torch.as_tensor(leadfield, device=device, dtype=dtype)
+        if isinstance(leadfield, torch.Tensor):
+            leadfield_t = leadfield.to(device=device, dtype=dtype)
         elif isinstance(leadfield, str):
-            loaded = np.load(leadfield)
-            leadfield_t = torch.as_tensor(loaded, device=device, dtype=dtype)
+            try:
+                loaded = np.load(leadfield)
+                leadfield_t = torch.as_tensor(loaded, device=device, dtype=dtype)
+            except:
+                leadfield_t = torch.load(leadfield)
         else:
             raise ValueError("leadfield must be ndarray, path string, tensor.")
 
-        if leadfield_t.shape != (n_ch, n_ch):
-                raise ValueError(
-                    f"leadfield covariance must be ({n_ch}, {n_ch}), got {leadfield_t.shape}."
-                )
+        if int(leadfield_t.ndim) != 2 or int(leadfield_t.size(0)) != n_ch or int(leadfield_t.size(1)) != n_ch:
+            raise ValueError(
+                f"leadfield covariance must be ({n_ch}, {n_ch}), got {leadfield_t.shape}."
+            )
         refCOV = leadfield_t
     else:
         refCOV = leadfield
 
     # apply non-rank-deficient average reference
-    eeg_ref = _non_rank_deficient_avg_ref(eeg_t.to(device=device))
+    eeg_ref = _non_rank_deficient_avg_ref(eeg.to(device=device))
 
     # broadband denoising uses the numpy-based helper and is returned as numpy
     cleaned_broadband, _, sensai_broadband, thresh_broadband = gedai_per_band(
@@ -142,14 +144,14 @@ def gedai(
 
     # exclude lowest-frequency bands based on sampling rate
     exclude = int(torch.ceil(torch.tensor(600.0 / float(sfreq))).item())
-    keep_upto = bands.shape[0] - exclude
+    keep_upto = bands.size(0) - exclude
 
     if keep_upto <= 0:
         cleaned = cleaned_broadband
         if skip_checks_and_return_cleaned_only:
             return cleaned
         
-        artifacts = eeg_ref[:, :cleaned.shape[1]] - cleaned
+        artifacts = eeg_ref[:, :cleaned.size(1)] - cleaned
         try:
             sensai_score = float(
                 sensai_basic(cleaned, artifacts, float(sfreq), float(epoch_size_used), refCOV, 1.0)[0]
@@ -173,7 +175,7 @@ def gedai(
     sensai_scores = [float(sensai_broadband)]
     thresholds = [float(thresh_broadband)]
 
-    for b in range(bands_to_process.shape[0]):
+    for b in range(bands_to_process.size(0)):
         band_sig = bands_to_process[b]
         cleaned_band, _, s_band, thr_band = gedai_per_band(
             band_sig, float(sfreq), None, denoising_strength, float(epoch_size_used), refCOV, "parabolic", False,
@@ -187,7 +189,7 @@ def gedai(
     if skip_checks_and_return_cleaned_only:
         return cleaned
     
-    artifacts = eeg_ref[:, :cleaned.shape[1]] - cleaned
+    artifacts = eeg_ref[:, :cleaned.size(1)] - cleaned
 
     try:
         sensai_score = float(
@@ -221,10 +223,10 @@ def _matlab_round_half_away_from_zero(x: float) -> int:
 
     This matches MATLAB behavior where .5 values round away from zero.
     """
-    xt = torch.tensor(float(x))
-    r = torch.floor(torch.abs(xt) + 0.5)
+    xt = float(x)
+    r = math.floor(abs(xt) + 0.5)
     r = r if xt >= 0 else -r
-    return int(r.item())
+    return int(r)
 
 def _ensure_even_epoch_size(epoch_size_sec: float, sfreq: float) -> float:
     """Return an epoch size (in seconds) corresponding to an even number of samples.
@@ -234,13 +236,11 @@ def _ensure_even_epoch_size(epoch_size_sec: float, sfreq: float) -> float:
     MATLAB rounding rule above. The returned value is the adjusted
     duration in seconds.
     """
-    ideal = torch.tensor(epoch_size_sec, dtype=torch.float64) * torch.tensor(
-        sfreq, dtype=torch.float64
-    )
-    nearest = _matlab_round_half_away_from_zero(float(ideal.item()))
+    ideal = epoch_size_sec * sfreq
+    nearest = _matlab_round_half_away_from_zero(float(ideal))
     if nearest % 2 != 0:
-        dist_lo = abs(float(ideal.item()) - (nearest - 1))
-        dist_hi = abs(float(ideal.item()) - (nearest + 1))
+        dist_lo = abs(float(ideal) - (nearest - 1))
+        dist_hi = abs(float(ideal) - (nearest + 1))
         nearest = (nearest - 1) if dist_lo < dist_hi else (nearest + 1)
     return float(nearest) / float(sfreq)
 
@@ -251,7 +251,7 @@ def _non_rank_deficient_avg_ref(eeg: torch.Tensor) -> torch.Tensor:
     The method subtracts the channel mean while preserving full rank by
     dividing by (n_ch + 1). Input `eeg` is expected shape (n_channels, n_samples).
     """
-    n_ch = eeg.shape[0]
+    n_ch = eeg.size(0)
     return eeg - (eeg.sum(dim=0, keepdim=True) / (n_ch + 1.0))
 
 # MODWT (Haar) using MATLAB analysis convention
@@ -296,7 +296,7 @@ def _imodwt_haar(W_list: List[torch.Tensor], VJ: torch.Tensor) -> torch.Tensor:
     fdtype = V.dtype
     cdtype = _complex_dtype_for(fdtype)
 
-    n = V.shape[-1]
+    n = V.size(-1)
     k = torch.arange(n, device=device, dtype=fdtype)
     angles = -2.0 * torch.pi * k / float(n)
     twiddle = torch.exp(1j * angles).to(dtype=cdtype)
@@ -355,7 +355,7 @@ def _modwtmra_haar(coeffs: List[torch.Tensor]) -> torch.Tensor:
     details = [d.to(dtype=torch.float64) for d in coeffs[:-1]]
     scale = coeffs[-1].to(dtype=torch.float64)
     J = len(details)
-    n_samples = details[0].shape[-1]
+    n_samples = details[0].size(-1)
     device = details[0].device
     dtype = details[0].dtype
 
