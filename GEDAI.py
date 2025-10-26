@@ -61,7 +61,7 @@ def batch_gedai(
         with ThreadPoolExecutor(max_workers=max_workers) as ex:
             results = list(ex.map(_one, range(eeg_batch.size(0))))
 
-    return torch.stack(results, dim=0)
+    return torch.stack(results, dim=0).to(device=device)
 def gedai(
     eeg: torch.Tensor,
     sfreq: float,
