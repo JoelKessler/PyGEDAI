@@ -11,6 +11,8 @@
 *.userosscache
 *.sln.docstates
 *.env
+*.vir*
+*anaconda*
 
 # User-specific files (MonoDevelop/Xamarin Studio)
 *.userprefs
