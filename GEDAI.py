@@ -1,0 +1,363 @@
+"""GEDAI: Generalized Eigenvalue Deartifacting Instrument (Python port).
+
+This module implements the GEDAI pipeline using torch for numerical
+operations. It provides helpers for converting between numpy and torch,
+MODWT analysis and synthesis using the Haar filters, center-of-energy
+alignment for zero-phase MRA, leadfield covariance loading, and the
+top-level gedai function that runs the full cleaning pipeline.
+
+The implementation follows MATLAB MODWT conventions for analysis
+filters and provides an exact inverse in the frequency domain.
+"""
+
+from __future__ import annotations
+from typing import Union, Dict, Any, Optional, List
+import numpy as np
+import torch
+
+from auxiliaries.GEDAI_per_band import gedai_per_band
+from auxiliaries.SENSAI_basic import sensai_basic
+
+def gedai(
+    eeg: Union[np.ndarray, torch.Tensor],
+    sfreq: float,
+    denoising_strength: str = "auto",
+    epoch_size: float = 1.0,
+    leadfield: Union[str, np.ndarray, torch.Tensor] = None,
+    *,
+    wavelet_levels: Optional[int] = 9,
+    matlab_levels: Optional[int] = None,
+    chanlabels: Optional[List[str]] = None,
+    device: Union[str, torch.device] = "cpu",
+    dtype: torch.dtype = torch.float64,
+) -> Dict[str, Any]:
+    """Run the GEDAI cleaning pipeline on raw or preprocessed EEG.
+
+    Parameters
+    - eeg: array-like or tensor shaped (n_channels, n_samples).
+    - sfreq: sampling frequency in Hz.
+    - denoising_strength: passed to per-band denoiser helpers.
+    - epoch_size: requested epoch duration in seconds; adjusted to an even
+      number of samples before processing.
+    - leadfield: leadfield descriptor or matrix used to load reference covariance.
+    - wavelet_levels / matlab_levels: level selection for MODWT analysis.
+    - chanlabels: optional channel label list for leadfield mapping.
+    - device / dtype: torch device and dtype for computation.
+
+    The function returns a dictionary containing cleaned data,
+    estimated artifacts, per-band sensai scores and thresholds, the
+    epoch size actually used, and the reference covariance matrix.
+    """
+    if eeg is None:
+        raise ValueError("eeg must be provided.")
+    eeg_t = torch.as_tensor(eeg, device=device, dtype=dtype)
+    if eeg_t.ndim != 2:
+        raise ValueError("eeg must be 2D (n_channels, n_samples).")
+    if leadfield is None:
+        raise ValueError("leadfield is required.")
+    if chanlabels is not None:
+        raise NotImplementedError("chanlabels handling not implemented yet.")
+    
+    n_ch, n_samp = eeg_t.shape
+    epoch_size_used = _ensure_even_epoch_size(float(epoch_size), float(sfreq))
+
+    if isinstance(leadfield, (np.ndarray, torch.Tensor)):
+        leadfield_t = torch.as_tensor(leadfield, device=device, dtype=dtype)
+    elif isinstance(leadfield, str):
+        loaded = np.load(leadfield)
+        leadfield_t = torch.as_tensor(loaded, device=device, dtype=dtype)
+    else:
+        raise ValueError("leadfield must be ndarray, path string, tensor.")
+
+    if leadfield_t.shape != (n_ch, n_ch):
+            raise ValueError(
+                f"leadfield covariance must be ({n_ch}, {n_ch}), got {leadfield_t.shape}."
+            )
+    
+    refCOV = leadfield_t
+
+    # apply non-rank-deficient average reference
+    eeg_ref = _non_rank_deficient_avg_ref(eeg_t.to(device=device))
+
+    # broadband denoising uses the numpy-based helper and is returned as numpy
+    cleaned_broadband, _, sensai_broadband, thresh_broadband = gedai_per_band(
+        eeg_ref, float(sfreq), None, "auto-", float(epoch_size_used), refCOV.to(device=device), "parabolic", False,
+        device=device, dtype=dtype
+    )
+    # Ensure cleaned_broadband is on the correct device
+    cleaned_broadband = cleaned_broadband.to(device=device, dtype=dtype)
+
+    # compute MODWT coefficients and validate perfect reconstruction
+    J = (2 ** int(matlab_levels) + 1) if (matlab_levels is not None) else int(wavelet_levels)
+    coeffs = _modwt_haar(cleaned_broadband, J)
+    xrec = _imodwt_haar(coeffs[:-1], coeffs[-1])
+    assert torch.allclose(xrec, cleaned_broadband, rtol=1e-10, atol=1e-12), "MODWT inverse failed PR"
+
+    bands = _modwtmra_haar(coeffs)
+    assert torch.allclose(bands.sum(dim=0), cleaned_broadband, rtol=1e-10, atol=1e-12), "MRA additivity failed"
+
+    # exclude lowest-frequency bands based on sampling rate
+    exclude = int(torch.ceil(torch.tensor(600.0 / float(sfreq))).item())
+    keep_upto = bands.shape[0] - exclude
+
+    if keep_upto <= 0:
+        cleaned = cleaned_broadband
+        artifacts = eeg_ref[:, :cleaned.shape[1]] - cleaned
+        try:
+            sensai_score = float(
+                sensai_basic(cleaned, artifacts, float(sfreq), float(epoch_size_used), refCOV, 1.0)[0]
+            )
+        except Exception:
+            sensai_score = None
+        return dict(
+            cleaned=cleaned,
+            artifacts=artifacts,
+            sensai_score=sensai_score,
+            sensai_score_per_band=torch.tensor([float(sensai_broadband)], device=device, dtype=dtype),
+            artifact_threshold_per_band=torch.tensor([float(thresh_broadband)], device=device, dtype=dtype),
+            artifact_threshold_broadband=float(thresh_broadband),
+            epoch_size_used=float(epoch_size_used),
+            refCOV=refCOV,
+        )
+
+    # denoise kept bands and sum them
+    bands_to_process = bands[:keep_upto]
+    filt = torch.zeros_like(bands_to_process)
+    sensai_scores = [float(sensai_broadband)]
+    thresholds = [float(thresh_broadband)]
+
+    for b in range(bands_to_process.shape[0]):
+        band_sig = bands_to_process[b]
+        cleaned_band, _, s_band, thr_band = gedai_per_band(
+            band_sig, float(sfreq), None, denoising_strength, float(epoch_size_used), refCOV, "parabolic", False,
+            device=device, dtype=dtype
+        )
+        filt[b] = cleaned_band.to(device=device, dtype=dtype)
+        sensai_scores.append(float(s_band))
+        thresholds.append(float(thr_band))
+
+    cleaned = filt.sum(dim=0)
+    artifacts = eeg_ref[:, :cleaned.shape[1]] - cleaned
+
+    try:
+        sensai_score = float(
+            sensai_basic(cleaned, artifacts, float(sfreq), float(epoch_size_used), refCOV, 1.0)[0]
+        )
+    except Exception:
+        sensai_score = None
+
+    return dict(
+        cleaned=cleaned,
+        artifacts=artifacts,
+        sensai_score=sensai_score,
+        sensai_score_per_band=torch.as_tensor(sensai_scores, device=device, dtype=dtype),
+        artifact_threshold_per_band=torch.as_tensor(thresholds, device=device, dtype=dtype),
+        artifact_threshold_broadband=float(thresh_broadband),
+        epoch_size_used=float(epoch_size_used),
+        refCOV=refCOV,
+    )
+
+def _to_torch(x, device, dtype=torch.float64):
+    """Convert an array-like object to a torch tensor on `device`.
+
+    If `x` is already a tensor, return a copy moved to the target
+    device and dtype. Otherwise create a tensor with the requested
+    device and dtype.
+    """
+    if torch.is_tensor(x):
+        return x.to(device=device, dtype=dtype)
+    return torch.as_tensor(x, device=device, dtype=dtype)
+
+def _to_numpy(x: torch.Tensor) -> np.ndarray:
+    """Return a CPU numpy array detached from the computation graph.
+
+    This is used when passing data to helpers that expect numpy inputs.
+    """
+    return x.detach().cpu().numpy()
+
+def _complex_dtype_for(dtype: torch.dtype) -> torch.dtype:
+    """Return a complex dtype matching the provided real dtype.
+
+    Uses double precision complex for float64 and single precision
+    complex for other float types.
+    """
+    return torch.cdouble if dtype == torch.float64 else torch.cfloat
+
+# MATLAB rounding and epoch-size parity 
+def _matlab_round_half_away_from_zero(x: float) -> int:
+    """Round a float following MATLAB's half-away-from-zero rule.
+
+    This matches MATLAB behavior where .5 values round away from zero.
+    """
+    xt = torch.tensor(float(x))
+    r = torch.floor(torch.abs(xt) + 0.5)
+    r = r if xt >= 0 else -r
+    return int(r.item())
+
+def _ensure_even_epoch_size(epoch_size_sec: float, sfreq: float) -> float:
+    """Return an epoch size (in seconds) corresponding to an even number of samples.
+
+    The function computes the ideal number of samples for the requested
+    epoch duration and adjusts to the nearest even integer using the
+    MATLAB rounding rule above. The returned value is the adjusted
+    duration in seconds.
+    """
+    ideal = torch.tensor(epoch_size_sec, dtype=torch.float64) * torch.tensor(
+        sfreq, dtype=torch.float64
+    )
+    nearest = _matlab_round_half_away_from_zero(float(ideal.item()))
+    if nearest % 2 != 0:
+        dist_lo = abs(float(ideal.item()) - (nearest - 1))
+        dist_hi = abs(float(ideal.item()) - (nearest + 1))
+        nearest = (nearest - 1) if dist_lo < dist_hi else (nearest + 1)
+    return float(nearest) / float(sfreq)
+
+# referencing & leadfield
+def _non_rank_deficient_avg_ref(eeg: torch.Tensor) -> torch.Tensor:
+    """Apply a non-rank-deficient average reference to EEG data.
+
+    The method subtracts the channel mean while preserving full rank by
+    dividing by (n_ch + 1). Input `eeg` is expected shape (n_channels, n_samples).
+    """
+    n_ch = eeg.shape[0]
+    return eeg - (eeg.sum(dim=0, keepdim=True) / (n_ch + 1.0))
+
+# MODWT (Haar) using MATLAB analysis convention
+def _modwt_haar(x: torch.Tensor, J: int) -> List[torch.Tensor]:
+    """Compute Haar MODWT coefficients up to level J.
+
+    Analysis filters follow MATLAB's 'second pair' convention. The
+    returned list contains detail coefficients W1..WJ and the final
+    scaling coefficients VJ. Each tensor has shape (n_channels, n_samples).
+    """
+    if J < 1:
+        raise ValueError("J must be >= 1")
+    device = x.device
+    dtype = x.dtype
+    inv_sqrt2 = 1.0 / torch.sqrt(torch.tensor(2.0, device=device, dtype=dtype))
+
+    h0 = inv_sqrt2
+    h1 = inv_sqrt2
+    g0 = inv_sqrt2
+    g1 = -inv_sqrt2
+
+    V = x.to(dtype=dtype).clone()
+    coeffs: List[torch.Tensor] = []
+    for j in range(1, J + 1):
+        s = 2 ** (j - 1)
+        # shift by the subsampling stride for this level
+        V_roll = torch.roll(V, shifts=s, dims=-1)
+        W = g0 * V + g1 * V_roll
+        V = h0 * V + h1 * V_roll
+        coeffs.append(W)
+    return coeffs + [V]
+
+def _imodwt_haar(W_list: List[torch.Tensor], VJ: torch.Tensor) -> torch.Tensor:
+    """Synthesize a time-domain signal from Haar MODWT bands.
+
+    The inverse is computed in the frequency domain using a least
+    squares combination of detail and scaling filters to ensure an
+    exact reconstruction for periodic signals.
+    """
+    V = VJ.to(dtype=VJ.dtype).clone()
+    device = V.device
+    fdtype = V.dtype
+    cdtype = _complex_dtype_for(fdtype)
+
+    n = V.shape[-1]
+    k = torch.arange(n, device=device, dtype=fdtype)
+    angles = -2.0 * torch.pi * k / float(n)
+    twiddle = torch.exp(1j * angles).to(dtype=cdtype)
+
+    for j in range(len(W_list), 0, -1):
+        s = 2 ** (j - 1)
+        # frequency-domain factors for this level
+        z = twiddle ** s
+        one = torch.ones_like(z)
+        inv_sqrt2 = (one.real.new_tensor(1.0) / torch.sqrt(one.real.new_tensor(2.0))).to(cdtype)
+
+        Hj = (one - z) * inv_sqrt2
+        Gj = (one + z) * inv_sqrt2
+
+        inv_denom = 1.0 / (torch.abs(Gj) ** 2 + torch.abs(Hj) ** 2)
+
+        FV = torch.fft.fft(V.to(cdtype), dim=-1)
+        FW = torch.fft.fft(W_list[j - 1].to(cdtype), dim=-1)
+        X_prev = (torch.conj(Gj) * FV + torch.conj(Hj) * FW) * inv_denom
+        V = torch.fft.ifft(X_prev, dim=-1).real.to(fdtype)
+    return V
+
+def _compute_coe_shifts(n_samples: int, J: int, device, dtype=torch.float64) -> torch.Tensor:
+    """Compute center-of-energy shifts for each detail level.
+
+    An impulse signal is analyzed and reconstructed for each detail
+    band to locate the impulse peak. The offset from the center is
+    returned for alignment of MRA bands to produce zero-phase outputs.
+    """
+    impulse = torch.zeros((1, n_samples), device=device, dtype=dtype)
+    center_idx = n_samples // 2
+    impulse[0, center_idx] = 1.0
+
+    coeffs = _modwt_haar(impulse, J)
+    details = coeffs[:-1]
+    scale = coeffs[-1]
+
+    coe_shifts = torch.zeros(J, dtype=torch.long, device=device)
+
+    for j in range(J):
+        sel = [torch.zeros_like(d) for d in details]
+        sel[j] = details[j]
+        band = _imodwt_haar(sel, torch.zeros_like(scale))
+        peak_idx = int(torch.argmax(torch.abs(band[0])).item())
+        coe_shifts[j] = peak_idx - center_idx
+
+    return coe_shifts
+
+def _modwtmra_haar(coeffs: List[torch.Tensor]) -> torch.Tensor:
+    """Construct MRA bands with center-of-energy alignment.
+
+    Returns a tensor of shape (J+1, n_channels, n_samples) where the
+    first J entries are detail bands D1..DJ and the last entry is the
+    smooth (scaling) band SJ. Bands are aligned to have zero phase.
+    """
+    details = [d.to(dtype=torch.float64) for d in coeffs[:-1]]
+    scale = coeffs[-1].to(dtype=torch.float64)
+    J = len(details)
+    n_samples = details[0].shape[-1]
+    device = details[0].device
+    dtype = details[0].dtype
+
+    coe_shifts = _compute_coe_shifts(n_samples, J, device=device, dtype=dtype)
+
+    bands: List[torch.Tensor] = []
+    for j in range(J):
+        sel = [torch.zeros_like(d) for d in details]
+        sel[j] = details[j]
+        band = _imodwt_haar(sel, torch.zeros_like(scale))
+        band_aligned = torch.roll(band, shifts=int(-coe_shifts[j].item()), dims=-1)
+        bands.append(band_aligned)
+
+    sel0 = [torch.zeros_like(d) for d in details]
+    smooth = _imodwt_haar(sel0, scale)
+
+    # determine smooth band COE and align
+    impulse = torch.zeros((1, n_samples), device=device, dtype=dtype)
+    impulse[0, n_samples // 2] = 1.0
+    coeffs_impulse = _modwt_haar(impulse, J)
+    smooth_impulse = _imodwt_haar(
+        [torch.zeros_like(d) for d in coeffs_impulse[:-1]], coeffs_impulse[-1]
+    )
+    smooth_coe = int(torch.argmax(torch.abs(smooth_impulse[0])).item()) - (n_samples // 2)
+
+    smooth_aligned = torch.roll(smooth, shifts=-smooth_coe, dims=-1)
+    bands.append(smooth_aligned)
+
+    out = torch.stack(bands, dim=0)
+
+    # check perfect reconstruction property after alignment
+    xrec = _imodwt_haar(details, scale)
+    assert torch.allclose(out.sum(dim=0), xrec, rtol=1e-10, atol=1e-12), (
+        "MRA additivity failed after COE alignment"
+    )
+
+    return out
