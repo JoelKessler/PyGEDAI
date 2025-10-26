@@ -6,3 +6,5 @@ torchvision
 numpy
 mat73
 mne
+seaborn
+matplotlib
