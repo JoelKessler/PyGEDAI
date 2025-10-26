@@ -19,6 +19,8 @@ import math
 from auxiliaries.GEDAI_per_band import gedai_per_band
 from auxiliaries.SENSAI_basic import sensai_basic
 
+from concurrent.futures import ThreadPoolExecutor
+
 def batch_gedai(
     eeg_batch: torch.Tensor,
     sfreq: float,
@@ -31,29 +33,35 @@ def batch_gedai(
     chanlabels: Optional[List[str]] = None,
     device: Union[str, torch.device] = "cpu",
     dtype: torch.dtype = torch.float64,
+    parallel: bool = True,
+    max_workers: int | None = None
 ):
     if eeg_batch.ndim != 3:
         raise ValueError("eeg_batch must be 3D (batch_size, n_channels, n_samples).")
     if leadfield is None or leadfield.shape != (eeg_batch.shape[1], eeg_batch.shape[1]):
         raise ValueError("leadfield must be provided with shape (n_channels, n_channels).")
 
-    results = [] 
-    for eeg in eeg_batch: 
-        result = gedai(
-            eeg, sfreq, 
-            denoising_strength=denoising_strength, 
-            epoch_size=epoch_size, 
-            leadfield=leadfield, 
-            wavelet_levels=wavelet_levels, 
-            matlab_levels=matlab_levels, 
-            chanlabels=chanlabels, 
-            device=device, 
+    def _one(eeg_idx: int) -> torch.Tensor:
+        return gedai(
+            eeg_batch[eeg_idx].detach(), sfreq,
+            denoising_strength=denoising_strength,
+            epoch_size=epoch_size,
+            leadfield=leadfield,
+            wavelet_levels=wavelet_levels,
+            matlab_levels=matlab_levels,
+            chanlabels=chanlabels,
+            device=device,
             dtype=dtype,
-            skip_checks_and_return_cleaned_only=True
+            skip_checks_and_return_cleaned_only=True,
         )
-        results.append(result)
-    return torch.stack(results, dim=0)
 
+    if not parallel:
+        results = [_one(eeg_idx) for eeg_idx in range(eeg_batch.size(0))]
+    else:
+        with ThreadPoolExecutor(max_workers=max_workers) as ex:
+            results = list(ex.map(_one, range(eeg_batch.size(0))))
+
+    return torch.stack(results, dim=0)
 def gedai(
     eeg: torch.Tensor,
     sfreq: float,
