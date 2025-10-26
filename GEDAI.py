@@ -22,7 +22,7 @@ from auxiliaries.SENSAI_basic import sensai_basic
 from concurrent.futures import ThreadPoolExecutor
 
 def batch_gedai(
-    eeg_batch: torch.Tensor,
+    eeg_batch: Union[torch.Tensor, list[torch.Tensor]], # list if varying lengths
     sfreq: float,
     denoising_strength: str = "auto",
     epoch_size: float = 1.0,
@@ -36,7 +36,8 @@ def batch_gedai(
     parallel: bool = True,
     max_workers: int | None = None
 ):
-    if eeg_batch.ndim != 3:
+    is_list = isinstance(eeg_batch, list)
+    if not is_list and eeg_batch.ndim != 3:
         raise ValueError("eeg_batch must be 3D (batch_size, n_channels, n_samples).")
     if leadfield is None or leadfield.shape != (eeg_batch.shape[1], eeg_batch.shape[1]):
         raise ValueError("leadfield must be provided with shape (n_channels, n_channels).")
@@ -55,12 +56,19 @@ def batch_gedai(
             skip_checks_and_return_cleaned_only=True,
         )
 
+    if is_list:
+        eeg_idx_total = len(eeg_batch)
+    else:
+        eeg_idx_total = eeg_batch.size(0)
     if not parallel:
-        results = [_one(eeg_idx) for eeg_idx in range(eeg_batch.size(0))]
+        results = [_one(eeg_idx) for eeg_idx in range(eeg_idx_total)]
     else:
         with ThreadPoolExecutor(max_workers=max_workers) as ex:
-            results = list(ex.map(_one, range(eeg_batch.size(0))))
-
+            results = list(ex.map(_one, range(eeg_idx_total)))
+    
+    if is_list:
+        return results
+    
     return torch.stack(results, dim=0).to(device=device)
 def gedai(
     eeg: torch.Tensor,
