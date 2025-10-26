@@ -39,7 +39,9 @@ def batch_gedai(
     is_list = isinstance(eeg_batch, list)
     if not is_list and eeg_batch.ndim != 3:
         raise ValueError("eeg_batch must be 3D (batch_size, n_channels, n_samples).")
-    if leadfield is None or leadfield.shape != (eeg_batch.shape[1], eeg_batch.shape[1]):
+    if leadfield is None or (
+        is_list and leadfield.shape != (eeg_batch[0].shape[0], eeg_batch[0].shape[0])) or (
+        not is_list and leadfield.shape != (eeg_batch.shape[1], eeg_batch.shape[1])):
         raise ValueError("leadfield must be provided with shape (n_channels, n_channels).")
 
     def _one(eeg_idx: int) -> torch.Tensor:
