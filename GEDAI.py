@@ -33,33 +33,27 @@ def batch_gedai(
     device: Union[str, torch.device] = "cpu",
     dtype: torch.dtype = torch.float64,
 ):
-    """
-    Vectorized version of gedai over the batch dimension using torch.func.vmap.
-    """
     if eeg_batch.ndim != 3:
         raise ValueError("eeg_batch must be 3D (batch_size, n_channels, n_samples).")
     if leadfield is None or leadfield.shape != (eeg_batch.shape[1], eeg_batch.shape[1]):
         raise ValueError("leadfield must be provided with shape (n_channels, n_channels).")
 
-    # Single-sample call, parameterized by per-sample leadfield lf
-    return vmap(
-        lambda eeg: gedai(
-            eeg, # [C, N]
-            sfreq,
-            denoising_strength=denoising_strength,
-            epoch_size=epoch_size,
-            leadfield=leadfield,
-            wavelet_levels=wavelet_levels,
-            matlab_levels=matlab_levels,
-            chanlabels=chanlabels,
-            device=device,
+    results = [] 
+    for eeg in eeg_batch: 
+        result = gedai(
+            eeg, sfreq, 
+            denoising_strength=denoising_strength, 
+            epoch_size=epoch_size, 
+            leadfield=leadfield, 
+            wavelet_levels=wavelet_levels, 
+            matlab_levels=matlab_levels, 
+            chanlabels=chanlabels, 
+            device=device, 
             dtype=dtype,
-            skip_checks_and_return_cleaned_only=True,
-        ),
-        in_dims=0, # only eeg_batch is batched
-        out_dims=0,
-        randomness="error",
-    )(eeg_batch)
+            skip_checks_and_return_cleaned_only=True
+        )
+        results.append(result)
+    return torch.stack(results, dim=0)
 
 def gedai(
     eeg: Union[np.ndarray, torch.Tensor],
