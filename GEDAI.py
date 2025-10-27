@@ -21,7 +21,6 @@ os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
 os.environ["BLIS_NUM_THREADS"] = "1"
 
 import torch
-import torch.nn.functional as F  # <-- for simple right-padding
 try:
     torch.set_num_threads(1) # intra-op
 except Exception as ex:
@@ -30,7 +29,8 @@ try:
     torch.set_num_interop_threads(1) # inter-op
 except Exception as ex:
     print(ex)
-    
+import torch.nn.functional as F
+
 from typing import Union, Dict, Any, Optional, List
 import numpy as np
 import math
