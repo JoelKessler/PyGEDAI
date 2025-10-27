@@ -427,106 +427,131 @@ def _modwt_haar(x: torch.Tensor, J: int) -> List[torch.Tensor]:
         coeffs.append(W)
     return coeffs + [V]
 
-def _imodwt_haar(W_list: List[torch.Tensor], VJ: torch.Tensor) -> torch.Tensor:
-    """Synthesize a time-domain signal from Haar MODWT bands.
-
-    The inverse is computed in the frequency domain using a least
-    squares combination of detail and scaling filters to ensure an
-    exact reconstruction for periodic signals.
+def _imodwt_haar_multi(W_stack: torch.Tensor, VJ: torch.Tensor) -> torch.Tensor:
     """
-    V = VJ.to(dtype=VJ.dtype).clone()
-    device = V.device
-    fdtype = V.dtype
+    Vectorized inverse MODWT (Haar) for per-band reconstructions.
+
+    Inputs
+    - W_stack: (J, n_channels, n_samples) detail coeffs
+    - VJ:      (n_channels, n_samples)    scaling coeffs
+
+    Output
+    - X_bands: (J, n_channels, n_samples)
+      where X_bands[j] equals _imodwt_haar(sel, zeros_like(VJ))
+      with sel[j] = W_stack[j], sel[k!=j] = 0
+    """
+    assert W_stack.ndim == 3, "W_stack must be (J, C, T)"
+    J, C, T = W_stack.shape
+    device = W_stack.device
+    fdtype = W_stack.dtype
     cdtype = _complex_dtype_for(fdtype)
 
-    n = V.size(-1)
-    k = torch.arange(n, device=device, dtype=fdtype)
-    angles = -2.0 * torch.pi * k / float(n)
-    twiddle = torch.exp(1j * angles).to(dtype=cdtype)
+    # Precompute FFT twiddle for all k and complex dtype
+    k = torch.arange(T, device=device, dtype=fdtype)
+    angles = -2.0 * torch.pi * k / float(T)
+    twiddle = torch.exp(1j * angles).to(dtype=cdtype)                 # (T,)
 
-    for j in range(len(W_list), 0, -1):
-        s = 2 ** (j - 1)
-        # frequency-domain factors for this level
-        z = twiddle ** s
-        one = torch.ones_like(z)
-        inv_sqrt2 = (one.real.new_tensor(1.0) / torch.sqrt(one.real.new_tensor(2.0))).to(cdtype)
+    # Prepare state replicated for all J target bands
+    V = VJ.unsqueeze(0).expand(J, C, T).contiguous()                   # (J, C, T)
 
-        Hj = (one - z) * inv_sqrt2
-        Gj = (one + z) * inv_sqrt2
+    # Pre-FFT of all W_j once (we'll select per level)
+    FW_all = torch.fft.fft(W_stack.to(cdtype), dim=-1)                 # (J, C, T)
 
-        inv_denom = 1.0 / (torch.abs(Gj) ** 2 + torch.abs(Hj) ** 2)
+    # Walk levels from J..1, inserting the matching W only for its band
+    for level in range(J, 0, -1):
+        s = 2 ** (level - 1)
+        z = twiddle ** s                                              # (T,)
 
-        FV = torch.fft.fft(V.to(cdtype), dim=-1)
-        FW = torch.fft.fft(W_list[j - 1].to(cdtype), dim=-1)
-        X_prev = (torch.conj(Gj) * FV + torch.conj(Hj) * FW) * inv_denom
-        V = torch.fft.ifft(X_prev, dim=-1).real.to(fdtype)
-    return V
+        # Haar analysis frequency responses
+        inv_sqrt2 = (z.real.new_tensor(1.0) / torch.sqrt(z.real.new_tensor(2.0))).to(cdtype)
+        Hj = (1 - z) * inv_sqrt2
+        Gj = (1 + z) * inv_sqrt2
+        inv_denom = 1.0 / (torch.abs(Gj) ** 2 + torch.abs(Hj) ** 2)   # (T,)
 
-def _compute_coe_shifts(n_samples: int, J: int, device, dtype=torch.float32) -> torch.Tensor:
-    """Compute center-of-energy shifts for each detail level.
+        # FFT(V) for all bands in parallel
+        FV = torch.fft.fft(V.to(cdtype), dim=-1)                      # (J, C, T)
 
-    An impulse signal is analyzed and reconstructed for each detail
-    band to locate the impulse peak. The offset from the center is
-    returned for alignment of MRA bands to produce zero-phase outputs.
+        # Select FW for this level: only the batch whose target band == level uses W[level-1]
+        # Build a mask that is 1 for batch==level-1 else 0, shape (J, 1, 1) to broadcast
+        mask = torch.zeros((J, 1, 1), device=device, dtype=cdtype)
+        mask[level - 1, 0, 0] = 1.0
+        FW_sel = FW_all[level - 1].unsqueeze(0) * mask                # (J, C, T)
+
+        # Vectorized update for all J reconstructions
+        X_prev = (torch.conj(Gj) * FV + torch.conj(Hj) * FW_sel) * inv_denom  # (J, C, T)
+        V = torch.fft.ifft(X_prev, dim=-1).real.to(fdtype)            # (J, C, T)
+
+    # After descending to level 1, V holds each per-band reconstruction
+    return V                                                          # (J, C, T)
+
+
+def _compute_coe_shifts_vec(n_samples: int, J: int, device, dtype=torch.float32) -> torch.Tensor:
+    """
+    Vectorized COE shifts for all detail levels.
+    Identical output to the scalar loop but ~Jx fewer Python trips.
     """
     impulse = torch.zeros((1, n_samples), device=device, dtype=dtype)
     center_idx = n_samples // 2
     impulse[0, center_idx] = 1.0
 
     coeffs = _modwt_haar(impulse, J)
-    details = coeffs[:-1]
-    scale = coeffs[-1]
+    W = torch.stack([c for c in coeffs[:-1]], dim=0)                  # (J, 1, T)
+    VJ = coeffs[-1]                                                   # (1, T)
 
-    coe_shifts = torch.zeros(J, dtype=torch.long, device=device)
+    # Reconstruct all impulse responses per detail band in parallel
+    bands_imp = _imodwt_haar_multi(W, VJ*0)                           # (J, 1, T)
+    # Peak index per band
+    peak_idx = torch.argmax(torch.abs(bands_imp[:, 0, :]), dim=-1)    # (J,)
+    coe_shifts = peak_idx - center_idx                                # (J,)
+    return coe_shifts.to(torch.long)
 
-    for j in range(J):
-        sel = [torch.zeros_like(d) for d in details]
-        sel[j] = details[j]
-        band = _imodwt_haar(sel, torch.zeros_like(scale))
-        peak_idx = int(torch.argmax(torch.abs(band[0])).item())
-        coe_shifts[j] = peak_idx - center_idx
-
-    return coe_shifts
 
 def _modwtmra_haar(coeffs: List[torch.Tensor]) -> torch.Tensor:
-    """Construct MRA bands with center-of-energy alignment.
-
-    Returns a tensor of shape (J+1, n_channels, n_samples) where the
-    first J entries are detail bands D1..DJ and the last entry is the
-    smooth (scaling) band SJ. Bands are aligned to have zero phase.
     """
+    Vectorized MRA construction with COE alignment.
+    Returns (J+1, n_channels, n_samples) with zero-phase bands.
+    Output matches the previous implementation exactly.
+    """
+    # Keep float32 as in your original for identical numerics
     details = [d.to(dtype=torch.float32) for d in coeffs[:-1]]
     scale = coeffs[-1].to(dtype=torch.float32)
+
     J = len(details)
-    n_samples = details[0].size(-1)
+    C, T = details[0].shape
     device = details[0].device
     dtype = details[0].dtype
 
-    coe_shifts = _compute_coe_shifts(n_samples, J, device=device, dtype=dtype)
+    # Stack details for vectorized inverse
+    W_stack = torch.stack(details, dim=0)                              # (J, C, T)
 
-    bands: List[torch.Tensor] = []
-    for j in range(J):
-        sel = [torch.zeros_like(d) for d in details]
-        sel[j] = details[j]
-        band = _imodwt_haar(sel, torch.zeros_like(scale))
-        band_aligned = torch.roll(band, shifts=int(-coe_shifts[j].item()), dims=-1)
-        bands.append(band_aligned)
+    # Vectorized COE for detail bands
+    coe_shifts = _compute_coe_shifts_vec(T, J, device=device, dtype=dtype)  # (J,)
 
-    sel0 = [torch.zeros_like(d) for d in details]
-    smooth = _imodwt_haar(sel0, scale)
+    # Reconstruct all detail bands at once (with VJ=0)
+    zero_scale = torch.zeros_like(scale)
+    details_bands = _imodwt_haar_multi(W_stack, zero_scale)            # (J, C, T)
 
-    # determine smooth band COE and align
-    impulse = torch.zeros((1, n_samples), device=device, dtype=dtype)
-    impulse[0, n_samples // 2] = 1.0
-    coeffs_impulse = _modwt_haar(impulse, J)
-    smooth_impulse = _imodwt_haar(
-        [torch.zeros_like(d) for d in coeffs_impulse[:-1]], coeffs_impulse[-1]
-    )
-    smooth_coe = int(torch.argmax(torch.abs(smooth_impulse[0])).item()) - (n_samples // 2)
+    # Apply per-band COE alignment
+    # Roll each band by -coe_shifts[j]
+    shifts = (-coe_shifts).tolist()
+    aligned_details = torch.stack(
+        [torch.roll(details_bands[j], shifts=shifts[j], dims=-1) for j in range(J)],
+        dim=0
+    )                                                                  # (J, C, T)
 
-    smooth_aligned = torch.roll(smooth, shifts=-smooth_coe, dims=-1)
-    bands.append(smooth_aligned)
+    # Smooth band (same as your original, including COE via impulse)
+    sel0 = torch.zeros_like(W_stack)
+    smooth = _imodwt_haar_multi(sel0, scale)[0]                        # any batch gives identical smooth
+    impulse = torch.zeros((1, T), device=device, dtype=dtype)
+    impulse[0, T // 2] = 1.0
+    coeffs_imp = _modwt_haar(impulse, J)
+    smooth_impulse = _imodwt_haar_multi(
+        torch.zeros((J, 1, T), device=device, dtype=dtype),
+        coeffs_imp[-1]
+    )[0]                                                               # (1, T)
+    smooth_coe = int(torch.argmax(torch.abs(smooth_impulse[0])).item()) - (T // 2)
+    smooth_aligned = torch.roll(smooth, shifts=-smooth_coe, dims=-1)   # (C, T)
 
-    out = torch.stack(bands, dim=0)
-
+    # Stack to (J+1, C, T)
+    out = torch.cat([aligned_details, smooth_aligned.unsqueeze(0)], dim=0)
     return out
