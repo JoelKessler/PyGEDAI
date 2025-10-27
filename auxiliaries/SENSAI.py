@@ -11,7 +11,7 @@ def _cov_matlab_like_batched(X: torch.Tensor, ddof: int = 1) -> torch.Tensor:
     unbiased (ddof=1), Hermitian-symmetrized for stability.
     Returns shape (batch, channels, channels)
     """
-    X = X.to(torch.float64)
+    X = X.to(torch.float32)
     _, _, S = X.shape
     if S <= ddof:
         raise ValueError(f"n_samples ({S}) must be > ddof ({ddof})")
@@ -61,7 +61,7 @@ def sensai(
     top_PCs: int = 3,
     *,
     device: Union[str, torch.device] = "cpu",
-    dtype: torch.dtype = torch.float64,
+    dtype: torch.dtype = torch.float32,
 ) -> Tuple[float, float, float]:
     """
     Compute SENSAI score and subspace similarities - OPTIMIZED BATCHED VERSION.

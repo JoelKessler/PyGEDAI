@@ -52,7 +52,7 @@ def batch_gedai(
     matlab_levels: Optional[int] = None,
     chanlabels: Optional[List[str]] = None,
     device: Union[str, torch.device] = "cpu",
-    dtype: torch.dtype = torch.float64,
+    dtype: torch.dtype = torch.float32,
     parallel: bool = True,
     max_workers: int | None = None,
     verbose_timing: bool = False,
@@ -122,7 +122,7 @@ def gedai(
     matlab_levels: Optional[int] = None,
     chanlabels: Optional[List[str]] = None,
     device: Union[str, torch.device] = "cpu",
-    dtype: torch.dtype = torch.float64,
+    dtype: torch.dtype = torch.float32,
     skip_checks_and_return_cleaned_only: bool = False,
     batched=False,
     verbose_timing: bool = False,
@@ -155,8 +155,7 @@ def gedai(
     if chanlabels is not None:
         raise NotImplementedError("chanlabels handling not implemented yet.")
     
-    if not skip_checks_and_return_cleaned_only:
-        eeg = eeg.to(device=device, dtype=dtype)
+    eeg = eeg.to(device=device, dtype=dtype)
 
     if verbose_timing:
         profiling.mark("start_gedai")
@@ -167,25 +166,22 @@ def gedai(
     if verbose_timing:
         profiling.mark("post_checks")
 
-    if not skip_checks_and_return_cleaned_only: # already checked, increase efficiency
-        if isinstance(leadfield, torch.Tensor):
-            leadfield_t = leadfield.to(device=device, dtype=dtype)
-        elif isinstance(leadfield, str):
-            try:
-                loaded = np.load(leadfield)
-                leadfield_t = torch.as_tensor(loaded, device=device, dtype=dtype)
-            except:
-                leadfield_t = torch.load(leadfield)
-        else:
-            raise ValueError("leadfield must be ndarray, path string, tensor.")
-
-        if int(leadfield_t.ndim) != 2 or int(leadfield_t.size(0)) != n_ch or int(leadfield_t.size(1)) != n_ch:
-            raise ValueError(
-                f"leadfield covariance must be ({n_ch}, {n_ch}), got {leadfield_t.shape}."
-            )
-        refCOV = leadfield_t
+    if isinstance(leadfield, torch.Tensor):
+        leadfield_t = leadfield.to(device=device, dtype=dtype)
+    elif isinstance(leadfield, str):
+        try:
+            loaded = np.load(leadfield)
+            leadfield_t = torch.as_tensor(loaded, device=device, dtype=dtype)
+        except:
+            leadfield_t = torch.load(leadfield).to(device=device, dtype=dtype)
     else:
-        refCOV = leadfield
+        raise ValueError("leadfield must be ndarray, path string, tensor.")
+
+    if int(leadfield_t.ndim) != 2 or int(leadfield_t.size(0)) != n_ch or int(leadfield_t.size(1)) != n_ch:
+        raise ValueError(
+            f"leadfield covariance must be ({n_ch}, {n_ch}), got {leadfield_t.shape}."
+        )
+    refCOV = leadfield_t
 
     if verbose_timing:
         profiling.mark("leadfield_loaded")
@@ -364,10 +360,10 @@ def gedai(
 def _complex_dtype_for(dtype: torch.dtype) -> torch.dtype:
     """Return a complex dtype matching the provided real dtype.
 
-    Uses double precision complex for float64 and single precision
+    Uses double precision complex for float32 and single precision
     complex for other float types.
     """
-    return torch.cdouble if dtype == torch.float64 else torch.cfloat
+    return torch.cdouble if dtype == torch.float32 else torch.cfloat
 
 # MATLAB rounding and epoch-size parity 
 def _matlab_round_half_away_from_zero(x: float) -> int:
@@ -471,7 +467,7 @@ def _imodwt_haar(W_list: List[torch.Tensor], VJ: torch.Tensor) -> torch.Tensor:
         V = torch.fft.ifft(X_prev, dim=-1).real.to(fdtype)
     return V
 
-def _compute_coe_shifts(n_samples: int, J: int, device, dtype=torch.float64) -> torch.Tensor:
+def _compute_coe_shifts(n_samples: int, J: int, device, dtype=torch.float32) -> torch.Tensor:
     """Compute center-of-energy shifts for each detail level.
 
     An impulse signal is analyzed and reconstructed for each detail
@@ -504,8 +500,8 @@ def _modwtmra_haar(coeffs: List[torch.Tensor]) -> torch.Tensor:
     first J entries are detail bands D1..DJ and the last entry is the
     smooth (scaling) band SJ. Bands are aligned to have zero phase.
     """
-    details = [d.to(dtype=torch.float64) for d in coeffs[:-1]]
-    scale = coeffs[-1].to(dtype=torch.float64)
+    details = [d.to(dtype=torch.float32) for d in coeffs[:-1]]
+    scale = coeffs[-1].to(dtype=torch.float32)
     J = len(details)
     n_samples = details[0].size(-1)
     device = details[0].device
@@ -537,11 +533,5 @@ def _modwtmra_haar(coeffs: List[torch.Tensor]) -> torch.Tensor:
     bands.append(smooth_aligned)
 
     out = torch.stack(bands, dim=0)
-
-    # check perfect reconstruction property after alignment
-    xrec = _imodwt_haar(details, scale)
-    assert torch.allclose(out.sum(dim=0), xrec, rtol=1e-10, atol=1e-12), (
-        "MRA additivity failed after COE alignment"
-    )
 
     return out

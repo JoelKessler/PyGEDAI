@@ -16,7 +16,7 @@ def _cov_matlab_like(X: torch.Tensor, ddof: int = 1) -> torch.Tensor:
     torch.Tensor
         Covariance matrix.
     """
-    X = X.to(torch.float64)
+    X = X.to(torch.float32)
     S = X.size(1)
     if S <= ddof:
         raise ValueError(f"n_samples ({S}) must be > ddof ({ddof})")
@@ -54,7 +54,7 @@ def sensai_basic(
     regularization_lambda: float = 0.05,
     *,
     device: Union[str, torch.device] = "cpu",
-    dtype: torch.dtype = torch.float64,
+    dtype: torch.dtype = torch.float32,
 ) -> Tuple[float, float, float]:
     """
     Compute SENSAI score and subspace similarities.
@@ -79,7 +79,7 @@ def sensai_basic(
     device : Union[str, torch.device]
         Device for computation (e.g., 'cpu', 'cuda'). Default is 'cpu'.
     dtype : torch.dtype
-        Data type for computation. Default is torch.float64.
+        Data type for computation. Default is torch.float32.
 
     Returns:
     Tuple[float, float, float]

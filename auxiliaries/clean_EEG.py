@@ -15,7 +15,7 @@ def clean_eeg(
     strict_matlab: bool = True,
     *,
     device: str | torch.device = "cpu",
-    dtype: torch.dtype = torch.float64,
+    dtype: torch.dtype = torch.float32,
     skip_checks_and_return_cleaned_only: bool = False
 ) -> Tuple[torch.Tensor, torch.Tensor, float]:
     """
@@ -37,7 +37,7 @@ def clean_eeg(
     Tuple containing cleaned data, artifact data, and the artifact threshold used.
     """
     # Determine complex and real data types based on the input dtype
-    ctype = torch.complex128 if dtype == torch.float64 else torch.complex64
+    ctype = torch.complex128 if dtype == torch.float32 else torch.complex64
     rtype = dtype
     
     # Convert inputs to PyTorch tensors with the specified device and ctype

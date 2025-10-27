@@ -19,7 +19,7 @@ def gedai_per_band(
     parallel: bool,
     *,
     device: Union[str, torch.device] = "cpu",
-    dtype: torch.dtype = torch.float64,
+    dtype: torch.dtype = torch.float32,
     skip_checks_and_return_cleaned_only: bool = False,
     verbose_timing: bool = False,
 ):
@@ -210,7 +210,7 @@ def _batch_cov_optimized(X: torch.Tensor, ddof: int = 1) -> torch.Tensor:
     Batched MATLAB-like covariance for X (channels, samples, epochs).
     Returns (channels, channels, epochs).
     """
-    X = X.to(dtype=torch.float64)
+    X = X.to(dtype=torch.float32)
     n_ch, n_samples, n_epochs = X.shape
     if n_samples <= ddof:
         raise ValueError(f"n_samples ({n_samples}) must be > ddof ({ddof})")
@@ -229,8 +229,8 @@ def _gevd_chol_batched(A_batch: torch.Tensor, B: torch.Tensor) -> Tuple[torch.Te
     Returns (V, D) with V: (n_ch, n_ch, n_epochs), D: (n_ch, n_ch, n_epochs)
     """
     n_ch, _, n_epochs = A_batch.shape
-    A_batch = A_batch.to(dtype=torch.float64)
-    B = B.to(dtype=torch.float64)
+    A_batch = A_batch.to(dtype=torch.float32)
+    B = B.to(dtype=torch.float32)
     B = 0.5 * (B + B.T)
     L = torch.linalg.cholesky(B)
     A = A_batch.permute(2, 0, 1)
@@ -248,11 +248,11 @@ def _movmean_optimized(x: torch.Tensor, k: int) -> torch.Tensor:
     Optimized centered moving mean using conv1d.
     """
     k = int(k)
-    x = x.to(dtype=torch.float64)
+    x = x.to(dtype=torch.float32)
     n = x.numel()
     if k <= 1 or n == 0:
         return x.clone()
-    kernel = torch.ones(1, 1, k, dtype=torch.float64, device=x.device) / k
+    kernel = torch.ones(1, 1, k, dtype=torch.float32, device=x.device) / k
     L = (k - 1) // 2
     R = k - L - 1
     x_padded = x.view(1, 1, -1)
@@ -275,7 +275,7 @@ def _findchangepts_mean_optimized(y: torch.Tensor, max_num_changes: int = 2) -> 
     """
     if max_num_changes != 2:
         raise NotImplementedError("Only max_num_changes=2 is implemented.")
-    y = y.to(dtype=torch.float64).flatten()
+    y = y.to(dtype=torch.float32).flatten()
     n = y.numel()
     if n <= 1:
         return []
@@ -294,12 +294,12 @@ def _findchangepts_mean_optimized(y: torch.Tensor, max_num_changes: int = 2) -> 
     best1_idx = torch.argmin(costs_1)
     best1 = costs_1[best1_idx].item()
     t1 = best1_idx.item()
-    pref1 = torch.full((n,), float("inf"), dtype=torch.float64)
+    pref1 = torch.full((n,), float("inf"), dtype=torch.float32)
     pref_arg = torch.full((n,), -1, dtype=torch.long)
     for q in range(1, n - 1):
         s_range = torch.arange(0, q)
-        left_sse_2 = torch.tensor([seg_sse_batch(torch.tensor([0]), torch.tensor([s])).item() for s in s_range], dtype=torch.float64)
-        mid_sse_2 = torch.tensor([seg_sse_batch(torch.tensor([s + 1]), torch.tensor([q])).item() for s in s_range], dtype=torch.float64)
+        left_sse_2 = torch.tensor([seg_sse_batch(torch.tensor([0]), torch.tensor([s])).item() for s in s_range], dtype=torch.float32)
+        mid_sse_2 = torch.tensor([seg_sse_batch(torch.tensor([s + 1]), torch.tensor([q])).item() for s in s_range], dtype=torch.float32)
         costs_2 = left_sse_2 + mid_sse_2
         best_idx = torch.argmin(costs_2)
         pref1[q] = costs_2[best_idx]

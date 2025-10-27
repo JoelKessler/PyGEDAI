@@ -47,7 +47,7 @@ def gedai_non_rank_deficient_avg_ref(eeg: EEGLike) -> EEGLike:
     if eeg.data.size(0) != eeg.nbchan:
         raise ValueError(f"eeg.nbchan ({eeg.nbchan}) must equal eeg.data.shape[0] ({eeg.data.size(0)}).")
 
-    data64 = eeg.data.to(dtype=torch.float64)
+    data64 = eeg.data.to(dtype=torch.float32)
 
     offset = data64.sum(dim=0, keepdim=True) / (eeg.nbchan + 1.0)
     data64.sub_(offset)

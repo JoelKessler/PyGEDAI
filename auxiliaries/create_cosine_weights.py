@@ -8,7 +8,7 @@ def create_cosine_weights(
     fullshift: bool,
     *,
     device: Union[str, torch.device] = "cpu",
-    dtype: torch.dtype = torch.float64,
+    dtype: torch.dtype = torch.float32,
 ) -> torch.Tensor:
     """
     Generate cosine weights for EEG data processing.
@@ -25,7 +25,7 @@ def create_cosine_weights(
     device : Union[str, torch.device], optional
         Device for computation (e.g., 'cpu', 'cuda'). Default is 'cpu'.
     dtype : torch.dtype, optional
-        Data type for computation. Default is torch.float64.
+        Data type for computation. Default is torch.float32.
 
     Returns:
     torch.Tensor
