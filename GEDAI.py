@@ -72,6 +72,7 @@ def batch_gedai(
         return results
     
     return torch.stack(results, dim=0).to(device=device)
+
 def gedai(
     eeg: torch.Tensor,
     sfreq: float,
@@ -114,9 +115,11 @@ def gedai(
     if chanlabels is not None:
         raise NotImplementedError("chanlabels handling not implemented yet.")
     
-    eeg = eeg.to(device=device, dtype=dtype)
+    if not skip_checks_and_return_cleaned_only:
+        eeg = eeg.to(device=device, dtype=dtype)
+
     n_ch = int(eeg.size(0))
-    epoch_size_used = _ensure_even_epoch_size(float(epoch_size), float(sfreq))
+    epoch_size_used = _ensure_even_epoch_size(float(epoch_size), sfreq)
 
     if not skip_checks_and_return_cleaned_only: # already checked, increase efficiency
         if isinstance(leadfield, torch.Tensor):
@@ -139,31 +142,32 @@ def gedai(
         refCOV = leadfield
 
     # apply non-rank-deficient average reference
-    eeg_ref = _non_rank_deficient_avg_ref(eeg.to(device=device))
+    eeg_ref = _non_rank_deficient_avg_ref(eeg)
 
     # broadband denoising uses the numpy-based helper and is returned as numpy
     cleaned_broadband, _, sensai_broadband, thresh_broadband = gedai_per_band(
-        eeg_ref, float(sfreq), None, "auto-", float(epoch_size_used), refCOV.to(device=device), "parabolic", False,
+        eeg_ref, sfreq, None, "auto-", epoch_size_used, refCOV.to(device=device), "parabolic", False,
         device=device, dtype=dtype
     )
+    
     # Ensure cleaned_broadband is on the correct device
     cleaned_broadband = cleaned_broadband.to(device=device, dtype=dtype)
-
+    
     # compute MODWT coefficients and validate perfect reconstruction
     J = (2 ** int(matlab_levels) + 1) if (matlab_levels is not None) else int(wavelet_levels)
     coeffs = _modwt_haar(cleaned_broadband, J)
     if skip_checks_and_return_cleaned_only:
         xrec = _imodwt_haar(coeffs[:-1], coeffs[-1])
         assert torch.allclose(xrec, cleaned_broadband, rtol=1e-10, atol=1e-12), "MODWT inverse failed PR"
-
+    
     bands = _modwtmra_haar(coeffs)
     if skip_checks_and_return_cleaned_only:
         assert torch.allclose(bands.sum(dim=0), cleaned_broadband, rtol=1e-10, atol=1e-12), "MRA additivity failed"
-
+    
     # exclude lowest-frequency bands based on sampling rate
-    exclude = int(torch.ceil(torch.tensor(600.0 / float(sfreq))).item())
+    exclude = int(torch.ceil(torch.tensor(600.0 / sfreq)).item())
     keep_upto = bands.size(0) - exclude
-
+    
     if keep_upto <= 0:
         cleaned = cleaned_broadband
         if skip_checks_and_return_cleaned_only:
@@ -190,20 +194,46 @@ def gedai(
     # denoise kept bands and sum them
     bands_to_process = bands[:keep_upto]
     filt = torch.zeros_like(bands_to_process)
-    sensai_scores = [float(sensai_broadband)]
-    thresholds = [float(thresh_broadband)]
 
-    for b in range(bands_to_process.size(0)):
-        band_sig = bands_to_process[b]
-        cleaned_band, _, s_band, thr_band = gedai_per_band(
-            band_sig, float(sfreq), None, denoising_strength, float(epoch_size_used), refCOV, "parabolic", False,
-            device=device, dtype=dtype
-        )
-        filt[b] = cleaned_band.to(device=device, dtype=dtype)
-        sensai_scores.append(float(s_band))
-        thresholds.append(float(thr_band))
+    if not skip_checks_and_return_cleaned_only:
+        sensai_scores = [float(sensai_broadband)]
+        thresholds = [float(thresh_broadband)]
 
+    def _call_gedai_band(band_sig):
+        if skip_checks_and_return_cleaned_only:
+            return gedai_per_band(
+                band_sig, sfreq, None, denoising_strength, epoch_size_used, 
+                refCOV, "parabolic", False,
+                device=device, dtype=dtype,
+                skip_checks_and_return_cleaned_only=skip_checks_and_return_cleaned_only
+            )
+        else:
+            cleaned_band, _, s_band, thr_band = gedai_per_band(
+                band_sig, sfreq, None, denoising_strength, epoch_size_used, 
+                refCOV, "parabolic", False,
+                device=device, dtype=dtype,
+                skip_checks_and_return_cleaned_only=skip_checks_and_return_cleaned_only
+            )
+            return cleaned_band, s_band, thr_band
+        
+    band_list = [bands_to_process[b] for b in range(bands_to_process.size(0))]
+
+    if skip_checks_and_return_cleaned_only:
+    # parallel map returning cleaned tensors
+        with ThreadPoolExecutor() as ex:
+            results = list(ex.map(_call_gedai_band, band_list))
+        for b, cleaned_band in enumerate(results):
+            filt[b] = cleaned_band
+    else:
+        with ThreadPoolExecutor() as ex:
+            futures = [ex.submit(_call_gedai_band, band) for band in band_list]
+            for b, fut in enumerate(futures):
+                cleaned_band, s_band, thr_band = fut.result()
+                filt[b] = cleaned_band
+                sensai_scores.append(s_band)
+                thresholds.append(thr_band)
     cleaned = filt.sum(dim=0)
+
     if skip_checks_and_return_cleaned_only:
         return cleaned
     

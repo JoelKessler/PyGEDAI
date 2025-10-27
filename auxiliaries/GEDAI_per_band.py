@@ -19,6 +19,7 @@ def gedai_per_band(
     *,
     device: Union[str, torch.device] = "cpu",
     dtype: torch.dtype = torch.float64,
+    skip_checks_and_return_cleaned_only: bool = False
 ):
     """
     PyTorch port of MATLAB GEDAI_per_band with numerical parity.
@@ -26,15 +27,22 @@ def gedai_per_band(
     # Input validation
     if eeg_data is None:
         raise ValueError("Cannot process empty data.")
-    X = eeg_data.to(device=device, dtype=dtype)
+    if skip_checks_and_return_cleaned_only:
+        X = eeg_data
+    else:
+        X = eeg_data.to(device=device, dtype=dtype)
     if X.ndim != 2:
         raise ValueError("Input EEG data must be a 2D matrix (channels x samples).")
-    refCOV_t = refCOV.to(device=device, dtype=dtype)
+    if skip_checks_and_return_cleaned_only:
+        refCOV_t = refCOV
+    else:
+        refCOV_t = refCOV.to(device=device, dtype=dtype)
+
     n_ch = X.size(0)
     pnts = X.size(1)
 
     # Epoching: require integer/even epoch_samples
-    epoch_samples_float = float(srate) * float(epoch_size)
+    epoch_samples_float = srate * epoch_size
     if abs(epoch_samples_float - round(epoch_samples_float)) > 1e-12:
         raise ValueError("srate*epoch_size must yield an integer number of samples.")
     epoch_samples = int(round(epoch_samples_float))
@@ -192,11 +200,13 @@ def gedai_per_band(
     # Clean EEG data
     cleaned_data_1, artifacts_data_1, artifact_threshold_out = clean_eeg(
         EEGdata_epoched, srate, epoch_size, artifact_threshold, refCOV_t, Eval, Evec,
-        strict_matlab=True, device=device, dtype=dtype
+        strict_matlab=True, device=device, dtype=dtype, 
+        skip_checks_and_return_cleaned_only=skip_checks_and_return_cleaned_only
     )
     cleaned_data_2, artifacts_data_2, _ = clean_eeg(
         EEGdata_epoched_2, srate, epoch_size, artifact_threshold, refCOV_t, Eval_2, Evec_2,
-        strict_matlab=True, device=device, dtype=dtype
+        strict_matlab=True, device=device, dtype=dtype, 
+        skip_checks_and_return_cleaned_only=skip_checks_and_return_cleaned_only
     )
 
     # Combine streams with cosine weights
@@ -207,17 +217,23 @@ def gedai_per_band(
     if size_reconstructed_2 > 0 and shifting > 0:
         cleaned_data_2[:, :shifting] *= cosine_weights[:, :shifting]
         cleaned_data_2[:, sample_end:] *= cosine_weights[:, shifting:]
-        artifacts_data_2[:, :shifting] *= cosine_weights[:, :shifting]
-        artifacts_data_2[:, sample_end:] *= cosine_weights[:, shifting:]
+        if not skip_checks_and_return_cleaned_only:
+            artifacts_data_2[:, :shifting] *= cosine_weights[:, :shifting]
+            artifacts_data_2[:, sample_end:] *= cosine_weights[:, shifting:]
 
     cleaned_data = cleaned_data_1.clone()
-    artifacts_data = artifacts_data_1.clone()
+    if not skip_checks_and_return_cleaned_only:
+        artifacts_data = artifacts_data_1.clone()
 
     if size_reconstructed_2 > 0:
         sl = slice(shifting, shifting + size_reconstructed_2)
         cleaned_data[:, sl] += cleaned_data_2
-        artifacts_data[:, sl] += artifacts_data_2
+        if not skip_checks_and_return_cleaned_only:
+            artifacts_data[:, sl] += artifacts_data_2
 
+    if skip_checks_and_return_cleaned_only:
+        return cleaned_data
+    
     # Compute final SENSAI score
     _, _, SENSAI_score = sensai(
         EEGdata_epoched, srate, epoch_size, artifact_threshold_out,
