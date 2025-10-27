@@ -201,23 +201,39 @@ def gedai(
         thresholds = [float(thresh_broadband)]
 
     t2 = time.time()
-    for b in range(bands_to_process.size(0)):
-        band_sig = bands_to_process[b]
+    def _call_gedai_band(band_sig):
         if skip_checks_and_return_cleaned_only:
-            cleaned_band = gedai_per_band(
-                band_sig, sfreq, None, denoising_strength, epoch_size_used, refCOV, "parabolic", False,
+            return gedai_per_band(
+                band_sig, sfreq, None, denoising_strength, epoch_size_used, 
+                refCOV, "parabolic", False,
                 device=device, dtype=dtype,
                 skip_checks_and_return_cleaned_only=skip_checks_and_return_cleaned_only
             )
         else:
             cleaned_band, _, s_band, thr_band = gedai_per_band(
-                band_sig, sfreq, None, denoising_strength, epoch_size_used, refCOV, "parabolic", False,
+                band_sig, sfreq, None, denoising_strength, epoch_size_used, 
+                refCOV, "parabolic", False,
                 device=device, dtype=dtype,
                 skip_checks_and_return_cleaned_only=skip_checks_and_return_cleaned_only
             )
-            sensai_scores.append(s_band)
-            thresholds.append(thr_band)
-        filt[b] = cleaned_band
+            return cleaned_band, s_band, thr_band
+        
+    band_list = [bands_to_process[b] for b in range(bands_to_process.size(0))]
+
+    if skip_checks_and_return_cleaned_only:
+    # parallel map returning cleaned tensors
+        with ThreadPoolExecutor() as ex:
+            results = list(ex.map(_call_gedai_band, band_list))
+        for b, cleaned_band in enumerate(results):
+            filt[b] = cleaned_band
+    else:
+        with ThreadPoolExecutor() as ex:
+            futures = [ex.submit(_call_gedai_band, band) for band in band_list]
+            for b, fut in enumerate(futures):
+                cleaned_band, s_band, thr_band = fut.result()
+                filt[b] = cleaned_band
+                sensai_scores.append(s_band)
+                thresholds.append(thr_band)
     t1 = time.time()
     print(f"Per-band denoising time: {t1 - t2:.4f} seconds")
     cleaned = filt.sum(dim=0)
