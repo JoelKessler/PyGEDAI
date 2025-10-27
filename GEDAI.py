@@ -346,7 +346,7 @@ def _non_rank_deficient_avg_ref(eeg: torch.Tensor) -> torch.Tensor:
     dividing by (n_ch + 1). Input `eeg` is expected shape (n_channels, n_samples).
     """
     n_ch = eeg.size(0)
-    return eeg - (eeg.sum(dim=0, keepdim=True) / (n_ch + 1.0))
+    return eeg - (eeg.sum(dim=0, keepdim=True) / n_ch) # matlab uses n_ch other possible (n_ch + 1.0)
 
 # MODWT (Haar) using MATLAB analysis convention
 def _modwt_haar(x: torch.Tensor, J: int) -> List[torch.Tensor]:
