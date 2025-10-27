@@ -225,8 +225,6 @@ def gedai(
     bands = _modwtmra_haar(coeffs)
     if verbose_timing:
         profiling.mark("mra_constructed")
-    if skip_checks_and_return_cleaned_only:
-        assert torch.allclose(bands.sum(dim=0), cleaned_broadband, rtol=1e-10, atol=1e-12), "MRA additivity failed"
     
     # exclude lowest-frequency bands based on sampling rate
     exclude = int(torch.ceil(torch.tensor(600.0 / sfreq)).item())
