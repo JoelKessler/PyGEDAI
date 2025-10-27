@@ -9,6 +9,7 @@ top-level gedai function that runs the full cleaning pipeline.
 The implementation follows MATLAB MODWT conventions for analysis
 filters and provides an exact inverse in the frequency domain.
 """
+# TODO: Clarify with autor, If uneven number after halving epochs e.g. sfreq=125, epoch_size=1.0s, 250 samples -> 125 is uneven -> round up and return original shape?
 from __future__ import annotations
 
 import os
@@ -20,6 +21,7 @@ os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
 os.environ["BLIS_NUM_THREADS"] = "1"
 
 import torch
+import torch.nn.functional as F  # <-- for simple right-padding
 try:
     torch.set_num_threads(1) # intra-op
 except Exception as ex:
@@ -164,9 +166,19 @@ def gedai(
     # apply non-rank-deficient average reference
     eeg_ref = _non_rank_deficient_avg_ref(eeg)
 
+    # pad right to next full epoch, then trim back later
+    T_in = int(eeg_ref.size(1))
+    epoch_samp = int(round(epoch_size_used * sfreq))  # e.g., 126 when enforcing even samples at 125 Hz
+    rem = T_in % epoch_samp
+    pad_right = (epoch_samp - rem) if rem != 0 else 0
+    if pad_right:
+        eeg_ref_proc = F.pad(eeg_ref, (0, pad_right), mode="replicate")  # e.g., 251 -> 252
+    else:
+        eeg_ref_proc = eeg_ref
+
     # broadband denoising uses the numpy-based helper and is returned as numpy
     cleaned_broadband, _, sensai_broadband, thresh_broadband = gedai_per_band(
-        eeg_ref, sfreq, None, "auto-", epoch_size_used, refCOV.to(device=device), "parabolic", False,
+        eeg_ref_proc, sfreq, None, "auto-", epoch_size_used, refCOV.to(device=device), "parabolic", False,
         device=device, dtype=dtype
     )
     
@@ -190,6 +202,9 @@ def gedai(
     
     if keep_upto <= 0:
         cleaned = cleaned_broadband
+        # trim back to original length if we padded
+        if pad_right:
+            cleaned = cleaned[:, :T_in]
         if skip_checks_and_return_cleaned_only:
             return cleaned
         
@@ -260,6 +275,10 @@ def gedai(
                 sensai_scores.append(s_band)
                 thresholds.append(thr_band)
     cleaned = filt.sum(dim=0)
+
+    # trim back to original length if we padded
+    if pad_right:
+        cleaned = cleaned[:, :T_in]
 
     if skip_checks_and_return_cleaned_only:
         return cleaned
