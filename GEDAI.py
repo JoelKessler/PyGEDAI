@@ -15,7 +15,6 @@ from typing import Union, Dict, Any, Optional, List
 import numpy as np
 import torch
 import math
-import time
 
 from auxiliaries.GEDAI_per_band import gedai_per_band
 from auxiliaries.SENSAI_basic import sensai_basic
@@ -200,7 +199,6 @@ def gedai(
         sensai_scores = [float(sensai_broadband)]
         thresholds = [float(thresh_broadband)]
 
-    t2 = time.time()
     def _call_gedai_band(band_sig):
         if skip_checks_and_return_cleaned_only:
             return gedai_per_band(
@@ -234,8 +232,6 @@ def gedai(
                 filt[b] = cleaned_band
                 sensai_scores.append(s_band)
                 thresholds.append(thr_band)
-    t1 = time.time()
-    print(f"Per-band denoising time: {t1 - t2:.4f} seconds")
     cleaned = filt.sum(dim=0)
 
     if skip_checks_and_return_cleaned_only:
