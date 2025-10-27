@@ -45,8 +45,8 @@ def batch_gedai(
         raise ValueError("leadfield must be provided with shape (n_channels, n_channels).")
 
     def _one(eeg_idx: int) -> torch.Tensor:
-        return gedai(
-            eeg_batch[eeg_idx].detach(), sfreq,
+        eeg_batch[eeg_idx] = gedai(
+            eeg_batch[eeg_idx], sfreq,
             denoising_strength=denoising_strength,
             epoch_size=epoch_size,
             leadfield=leadfield,
@@ -57,6 +57,7 @@ def batch_gedai(
             dtype=dtype,
             skip_checks_and_return_cleaned_only=True,
         )
+        return True
 
     if is_list:
         eeg_idx_total = len(eeg_batch)
@@ -69,9 +70,9 @@ def batch_gedai(
             results = list(ex.map(_one, range(eeg_idx_total)))
     
     if is_list:
-        return results
+        return eeg_batch
     
-    return torch.stack(results, dim=0).to(device=device)
+    return eeg_batch #torch.stack(results, dim=0).to(device=device)
 
 def gedai(
     eeg: torch.Tensor,
