@@ -9,11 +9,28 @@ top-level gedai function that runs the full cleaning pipeline.
 The implementation follows MATLAB MODWT conventions for analysis
 filters and provides an exact inverse in the frequency domain.
 """
-
 from __future__ import annotations
+
+import os
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
+os.environ["OPENBLAS_NUM_THREADS"] = "1"
+os.environ["NUMEXPR_NUM_THREADS"] = "1"
+os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
+os.environ["BLIS_NUM_THREADS"] = "1"
+
+import torch
+try:
+    torch.set_num_threads(1) # intra-op
+except Exception as ex:
+    print(ex)
+try:
+    torch.set_num_interop_threads(1) # inter-op
+except Exception as ex:
+    print(ex)
+    
 from typing import Union, Dict, Any, Optional, List
 import numpy as np
-import torch
 import math
 
 from auxiliaries.GEDAI_per_band import gedai_per_band
@@ -56,6 +73,7 @@ def batch_gedai(
             device=device,
             dtype=dtype,
             skip_checks_and_return_cleaned_only=True,
+            batched=True
         )
         return True
 
@@ -87,6 +105,7 @@ def gedai(
     device: Union[str, torch.device] = "cpu",
     dtype: torch.dtype = torch.float64,
     skip_checks_and_return_cleaned_only: bool = False,
+    batched=False,
 ) -> Union[Dict[str, Any], torch.Tensor]:
     """Run the GEDAI cleaning pipeline on raw or preprocessed EEG.
 
@@ -221,11 +240,18 @@ def gedai(
 
     if skip_checks_and_return_cleaned_only:
     # parallel map returning cleaned tensors
-        with ThreadPoolExecutor() as ex:
-            results = list(ex.map(_call_gedai_band, band_list))
-        for b, cleaned_band in enumerate(results):
-            filt[b] = cleaned_band
+        if not batched:
+            with ThreadPoolExecutor() as ex:
+                results = list(ex.map(_call_gedai_band, band_list))
+            for b, cleaned_band in enumerate(results):
+                filt[b] = cleaned_band
+        else:
+            for b, band in enumerate(band_list):
+                filt[b] = _call_gedai_band(band)
     else:
+        if batched:
+            raise NotImplementedError("Batched processing with sensai scores not implemented yet.")
+        
         with ThreadPoolExecutor() as ex:
             futures = [ex.submit(_call_gedai_band, band) for band in band_list]
             for b, fut in enumerate(futures):
