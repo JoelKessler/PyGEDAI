@@ -201,7 +201,6 @@ def gedai(
         thresholds = [float(thresh_broadband)]
 
     t2 = time.time()
-    print(f"Starting per-band denoising time: {t2 - t1:.4f} seconds")
     for b in range(bands_to_process.size(0)):
         band_sig = bands_to_process[b]
         if skip_checks_and_return_cleaned_only:
