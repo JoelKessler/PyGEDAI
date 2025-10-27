@@ -150,7 +150,7 @@ def sensai_fminbnd(
 
     xopt, fval = _minimize_scalar_bounded(
         objective, minThreshold, maxThreshold,
-        xtol=float(TolX), maxiter=500
+        xtol=float(TolX), maxiter=150
     )
     profiling.mark("sensai_fminbnd_done")
 
