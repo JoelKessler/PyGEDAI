@@ -16,6 +16,7 @@ def clean_eeg(
     *,
     device: str | torch.device = "cpu",
     dtype: torch.dtype = torch.float64,
+    skip_checks_and_return_cleaned_only: bool = False
 ) -> Tuple[torch.Tensor, torch.Tensor, float]:
     """
     Clean EEG data using GEDAI methodology.
@@ -40,10 +41,15 @@ def clean_eeg(
     rtype = dtype
 
     # Convert inputs to PyTorch tensors with the specified device and ctype
-    EEG = EEGdata_epoched.to(device=device, dtype=ctype)
-    Ev = Eval.to(device=device, dtype=ctype)
-    U = Evec.to(device=device, dtype=ctype)
-
+    if not skip_checks_and_return_cleaned_only:
+        EEG = EEGdata_epoched.to(device=device, dtype=ctype)
+        Ev = Eval.to(device=device, dtype=ctype)
+        U = Evec.to(device=device, dtype=ctype)
+    else:
+        EEG = EEGdata_epoched
+        Ev = Eval
+        U = Evec
+        
     # Validate input shapes and dimensions
     if EEG.ndim != 3:
         raise ValueError("EEGdata_epoched must be 3D: (num_chans, epoch_samples, num_epochs)")
@@ -113,7 +119,8 @@ def clean_eeg(
     if cw.ndim != 2 or cw.size(0) != num_chans or cw.size(1) != epoch_samples:
         raise ValueError(f"cosine_weights shape {tuple(cw.shape)} != ({num_chans}, {epoch_samples})")
 
-    artifacts = torch.zeros_like(EEG, dtype=ctype, device=device)
+    if not skip_checks_and_return_cleaned_only:
+        artifacts = torch.zeros_like(EEG, dtype=ctype, device=device)
     cleaned_epoched = torch.zeros_like(EEG, dtype=ctype, device=device)
 
     # Process each epoch to clean EEG data
@@ -133,7 +140,8 @@ def clean_eeg(
         # Solve for artifact contributions using least squares
         sol = torch.linalg.lstsq(U[:, :, i].conj().transpose(-2, -1), artifacts_timecourses).solution
 
-        artifacts[:, :, i] = sol
+        if not skip_checks_and_return_cleaned_only:
+            artifacts[:, :, i] = sol
         cleaned_epoch = epoch_data - sol
 
         # Apply cosine windowing to the cleaned epoch
@@ -148,6 +156,8 @@ def clean_eeg(
 
     # Reshape epoched data into contiguous format
     cleaned_data = cleaned_epoched.permute(0, 2, 1).contiguous().reshape(num_chans, -1).real.to(rtype)
-    artifacts_data = artifacts.permute(0, 2, 1).contiguous().reshape(num_chans, -1).real.to(rtype)
-
-    return cleaned_data, artifacts_data, float(artifact_threshold_in)
+    if not skip_checks_and_return_cleaned_only:
+        artifacts_data = artifacts.permute(0, 2, 1).contiguous().reshape(num_chans, -1).real.to(rtype)
+        return cleaned_data, artifacts_data, float(artifact_threshold_in)
+    
+    return cleaned_data, None, None

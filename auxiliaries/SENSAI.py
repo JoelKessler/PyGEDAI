@@ -117,5 +117,5 @@ def sensai(
     SIGNAL_subspace_similarity = 100.0 * float(sig_sim.mean().item())
     NOISE_subspace_similarity  = 100.0 * float(noi_sim.mean().item())
     SENSAI_score = SIGNAL_subspace_similarity - float(noise_multiplier) * NOISE_subspace_similarity
-
+    
     return float(SIGNAL_subspace_similarity), float(NOISE_subspace_similarity), float(SENSAI_score)
