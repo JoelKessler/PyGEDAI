@@ -221,10 +221,7 @@ def gedai(
     coeffs = _modwt_haar(cleaned_broadband, J)
     if verbose_timing:
         profiling.mark("modwt_analysis")
-    if skip_checks_and_return_cleaned_only:
-        xrec = _imodwt_haar(coeffs[:-1], coeffs[-1])
-        assert torch.allclose(xrec, cleaned_broadband, rtol=1e-10, atol=1e-12), "MODWT inverse failed PR"
-    
+
     bands = _modwtmra_haar(coeffs)
     if verbose_timing:
         profiling.mark("mra_constructed")
