@@ -240,10 +240,7 @@ def _gevd_chol_batched(A_batch: torch.Tensor, B: torch.Tensor) -> Tuple[torch.Te
     S = 0.5 * (S + S.transpose(1, 2))
     w, Yev = torch.linalg.eigh(S)
     V = torch.linalg.solve_triangular(L_expanded.transpose(1, 2), Yev, upper=True)
-    D = torch.zeros(n_epochs, n_ch, n_ch, dtype=torch.float64, device=A.device)
-    batch_indices = torch.arange(n_epochs, device=A.device)
-    diag_indices = torch.arange(n_ch, device=A.device)
-    D[batch_indices.view(-1, 1), diag_indices, diag_indices] = w
+    D = torch.diag_embed(w) # (n_epochs, n_ch, n_ch)
     return V.permute(1, 2, 0), D.permute(1, 2, 0)
 
 def _movmean_optimized(x: torch.Tensor, k: int) -> torch.Tensor:
