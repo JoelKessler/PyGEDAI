@@ -31,9 +31,7 @@ def create_cosine_weights(
     torch.Tensor
         A tensor of shape (channels, N) with cosine weights.
     """
-    srate_t = torch.tensor(float(srate), device=device, dtype=dtype)
-    epoch_t = torch.tensor(float(epoch_size), device=device, dtype=dtype)
-    N_float = srate_t * epoch_t
+    N_float = float(srate) * float(epoch_size)  # Direct scalar computation
     if not torch.isfinite(N_float):
         raise ValueError("srate*epoch_size must be finite.")
     N_round_t = torch.round(N_float)
