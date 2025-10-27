@@ -1,6 +1,122 @@
 import torch
 from typing import Tuple, Callable
 from .SENSAI import sensai
+import math
+
+def _sign(x):
+    #  https://numpy.org/devdocs/reference/generated/numpy.sign.html
+    return -1 if x < 0 else 0 if x == 0 else 1
+
+def _minimize_scalar_bounded(func, x1, x2, args=(),
+                             xtol=1e-5, maxiter=500):
+    # https://github.com/scipy/scipy/blob/v1.16.2/scipy/optimize/_optimize.py#L2195-L2286
+    """
+    Options
+    -------
+    maxiter : int
+        Maximum number of iterations to perform.
+    disp: int, optional
+        If non-zero, print messages.
+
+        ``0`` : no message printing.
+
+        ``1`` : non-convergence notification messages only.
+
+        ``2`` : print a message on convergence too.
+
+        ``3`` : print iteration results.
+
+    xtol : float
+        Absolute error in solution `xopt` acceptable for convergence.
+
+    """
+    if x1 > x2:
+        raise ValueError("The lower bound exceeds the upper bound.")
+
+    sqrt_eps = math.sqrt(2.2e-16)
+    golden_mean = 0.5 * (3.0 - math.sqrt(5.0))
+    a, b = x1, x2
+    fulc = a + golden_mean * (b - a)
+    nfc, xf = fulc, fulc
+    rat = e = 0.0
+    x = xf
+    fx = func(x, *args)
+    num = 1
+    fmin_data = (1, xf, fx)
+    fu = float("inf")
+
+    ffulc = fnfc = fx
+    xm = 0.5 * (a + b)
+    tol1 = sqrt_eps * abs(xf) + xtol / 3.0
+    tol2 = 2.0 * tol1
+
+    while (abs(xf - xm) > (tol2 - 0.5 * (b - a))):
+        golden = 1
+        # Check for parabolic fit
+        if abs(e) > tol1:
+            golden = 0
+            r = (xf - nfc) * (fx - ffulc)
+            q = (xf - fulc) * (fx - fnfc)
+            p = (xf - fulc) * q - (xf - nfc) * r
+            q = 2.0 * (q - r)
+            if q > 0.0:
+                p = -p
+            q = abs(q)
+            r = e
+            e = rat
+
+            # Check for acceptability of parabola
+            if ((abs(p) < abs(0.5*q*r)) and (p > q*(a - xf)) and
+                    (p < q * (b - xf))):
+                rat = (p + 0.0) / q
+                x = xf + rat
+
+                if ((x - a) < tol2) or ((b - x) < tol2):
+                    si = _sign(xm - xf) + ((xm - xf) == 0)
+                    rat = tol1 * si
+            else:      # do a golden-section step
+                golden = 1
+
+        if golden:  # do a golden-section step
+            if xf >= xm:
+                e = a - xf
+            else:
+                e = b - xf
+            rat = golden_mean*e
+
+        si = _sign(rat) + (rat == 0)
+        x = xf + si * max(abs(rat), tol1)
+        fu = func(x, *args)
+        num += 1
+
+        if fu <= fx:
+            if x >= xf:
+                a = xf
+            else:
+                b = xf
+            fulc, ffulc = nfc, fnfc
+            nfc, fnfc = xf, fx
+            xf, fx = x, fu
+        else:
+            if x < xf:
+                a = x
+            else:
+                b = x
+            if (fu <= fnfc) or (nfc == xf):
+                fulc, ffulc = nfc, fnfc
+                nfc, fnfc = x, fu
+            elif (fu <= ffulc) or (fulc == xf) or (fulc == nfc):
+                fulc, ffulc = x, fu
+
+        xm = 0.5 * (a + b)
+        tol1 = sqrt_eps * abs(xf) + xtol / 3.0
+        tol2 = 2.0 * tol1
+
+        if num >= maxiter:
+            break
+
+    fval = fx
+    return xf, fval
 
 
 def fminbnd_brent(
@@ -107,8 +223,8 @@ def fminbnd_brent(
                 v, fv = u, fu
 
     exitflag = 0 if converged else 1
-    return x, fx, exitflag, {"nfev": nfev, "method": "brent"}
-
+    return x, fx #, exitflag, {"nfev": nfev, "method": "brent"}
+ 
 
 def sensai_fminbnd(
     minThreshold: float,
@@ -121,7 +237,6 @@ def sensai_fminbnd(
     Evec: torch.Tensor,
     noise_multiplier: float,
     TolX: float = 1e-1,
-    Display: int = 0,
 ) -> Tuple[float, float]:
     """MATLAB-style wrapper: returns (optimalThreshold, maxSENSAIScore)."""
 
@@ -139,13 +254,9 @@ def sensai_fminbnd(
         )
         return -float(score)
 
-    xopt, fval, ierr, info = fminbnd_brent(
-        objective, float(minThreshold), float(maxThreshold),
+    xopt, fval = _minimize_scalar_bounded(
+        objective, minThreshold, maxThreshold,
         xtol=float(TolX), maxiter=500
     )
-
-    if Display:  # optional, quiet by default
-        print(f"[sensai_fminbnd] iters≈{info['nfev']} fevals, "
-              f"exitflag={ierr}, xopt={xopt}, fmin={fval}")
 
     return float(xopt), float(-fval)
