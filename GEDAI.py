@@ -34,6 +34,7 @@ import torch.nn.functional as F
 from typing import Union, Dict, Any, Optional, List
 import numpy as np
 import math
+import profiling
 
 from auxiliaries.GEDAI_per_band import gedai_per_band
 from auxiliaries.SENSAI_basic import sensai_basic
@@ -53,8 +54,14 @@ def batch_gedai(
     device: Union[str, torch.device] = "cpu",
     dtype: torch.dtype = torch.float64,
     parallel: bool = True,
-    max_workers: int | None = None
+    max_workers: int | None = None,
+    verbose_timing: bool = False,
 ):
+    if verbose_timing:
+        profiling.reset()
+        profiling.enable(True)
+        profiling.mark("start_batch")
+
     is_list = isinstance(eeg_batch, list)
     if not is_list and eeg_batch.ndim != 3:
         raise ValueError("eeg_batch must be 3D (batch_size, n_channels, n_samples).")
@@ -64,6 +71,9 @@ def batch_gedai(
         raise ValueError("leadfield must be provided with shape (n_channels, n_channels).")
 
     def _one(eeg_idx: int) -> torch.Tensor:
+        if verbose_timing:
+            profiling.mark(f"one_start_idx_{eeg_idx}")
+
         eeg_batch[eeg_idx] = gedai(
             eeg_batch[eeg_idx], sfreq,
             denoising_strength=denoising_strength,
@@ -75,8 +85,12 @@ def batch_gedai(
             device=device,
             dtype=dtype,
             skip_checks_and_return_cleaned_only=True,
-            batched=True
+            batched=True,
+            verbose_timing=bool(verbose_timing)
         )
+
+        if verbose_timing:
+            profiling.mark(f"one_end_idx_{eeg_idx}")
         return True
 
     if is_list:
@@ -88,10 +102,13 @@ def batch_gedai(
     else:
         with ThreadPoolExecutor(max_workers=max_workers) as ex:
             results = list(ex.map(_one, range(eeg_idx_total)))
-    
+    if verbose_timing:
+        profiling.mark("batch_done")
+        profiling.report()
+
     if is_list:
         return eeg_batch
-    
+
     return eeg_batch #torch.stack(results, dim=0).to(device=device)
 
 def gedai(
@@ -108,6 +125,7 @@ def gedai(
     dtype: torch.dtype = torch.float64,
     skip_checks_and_return_cleaned_only: bool = False,
     batched=False,
+    verbose_timing: bool = False,
 ) -> Union[Dict[str, Any], torch.Tensor]:
     """Run the GEDAI cleaning pipeline on raw or preprocessed EEG.
 
@@ -140,8 +158,14 @@ def gedai(
     if not skip_checks_and_return_cleaned_only:
         eeg = eeg.to(device=device, dtype=dtype)
 
+    if verbose_timing:
+        profiling.mark("start_gedai")
+
     n_ch = int(eeg.size(0))
     epoch_size_used = _ensure_even_epoch_size(float(epoch_size), sfreq)
+
+    if verbose_timing:
+        profiling.mark("post_checks")
 
     if not skip_checks_and_return_cleaned_only: # already checked, increase efficiency
         if isinstance(leadfield, torch.Tensor):
@@ -163,8 +187,14 @@ def gedai(
     else:
         refCOV = leadfield
 
+    if verbose_timing:
+        profiling.mark("leadfield_loaded")
+
     # apply non-rank-deficient average reference
     eeg_ref = _non_rank_deficient_avg_ref(eeg)
+
+    if verbose_timing:
+        profiling.mark("avg_ref_applied")
 
     # pad right to next full epoch, then trim back later
     T_in = int(eeg_ref.size(1))
@@ -176,11 +206,16 @@ def gedai(
     else:
         eeg_ref_proc = eeg_ref
 
+    if verbose_timing:
+        profiling.mark("padding_done")
+
     # broadband denoising uses the numpy-based helper and is returned as numpy
     cleaned_broadband, _, sensai_broadband, thresh_broadband = gedai_per_band(
         eeg_ref_proc, sfreq, None, "auto-", epoch_size_used, refCOV.to(device=device), "parabolic", False,
-        device=device, dtype=dtype
+        device=device, dtype=dtype, verbose_timing=bool(verbose_timing)
     )
+    if verbose_timing:
+        profiling.mark("broadband_denoise")
     
     # Ensure cleaned_broadband is on the correct device
     cleaned_broadband = cleaned_broadband.to(device=device, dtype=dtype)
@@ -188,11 +223,15 @@ def gedai(
     # compute MODWT coefficients and validate perfect reconstruction
     J = (2 ** int(matlab_levels) + 1) if (matlab_levels is not None) else int(wavelet_levels)
     coeffs = _modwt_haar(cleaned_broadband, J)
+    if verbose_timing:
+        profiling.mark("modwt_analysis")
     if skip_checks_and_return_cleaned_only:
         xrec = _imodwt_haar(coeffs[:-1], coeffs[-1])
         assert torch.allclose(xrec, cleaned_broadband, rtol=1e-10, atol=1e-12), "MODWT inverse failed PR"
     
     bands = _modwtmra_haar(coeffs)
+    if verbose_timing:
+        profiling.mark("mra_constructed")
     if skip_checks_and_return_cleaned_only:
         assert torch.allclose(bands.sum(dim=0), cleaned_broadband, rtol=1e-10, atol=1e-12), "MRA additivity failed"
     
@@ -234,19 +273,22 @@ def gedai(
         sensai_scores = [float(sensai_broadband)]
         thresholds = [float(thresh_broadband)]
 
+    if verbose_timing:
+        profiling.mark("prepare_band_processing")
+
     def _call_gedai_band(band_sig):
         if skip_checks_and_return_cleaned_only:
             return gedai_per_band(
                 band_sig, sfreq, None, denoising_strength, epoch_size_used, 
                 refCOV, "parabolic", False,
-                device=device, dtype=dtype,
+                device=device, dtype=dtype, verbose_timing=bool(verbose_timing),
                 skip_checks_and_return_cleaned_only=skip_checks_and_return_cleaned_only
             )
         else:
             cleaned_band, _, s_band, thr_band = gedai_per_band(
                 band_sig, sfreq, None, denoising_strength, epoch_size_used, 
                 refCOV, "parabolic", False,
-                device=device, dtype=dtype,
+                device=device, dtype=dtype, verbose_timing=bool(verbose_timing),
                 skip_checks_and_return_cleaned_only=skip_checks_and_return_cleaned_only
             )
             return cleaned_band, s_band, thr_band
@@ -260,9 +302,13 @@ def gedai(
                 results = list(ex.map(_call_gedai_band, band_list))
             for b, cleaned_band in enumerate(results):
                 filt[b] = cleaned_band
+            if verbose_timing:
+                profiling.mark("bands_denoised_parallel")
         else:
             for b, band in enumerate(band_list):
                 filt[b] = _call_gedai_band(band)
+            if verbose_timing:
+                profiling.mark("bands_denoised_serial")
     else:
         if batched:
             raise NotImplementedError("Batched processing with sensai scores not implemented yet.")
@@ -274,13 +320,21 @@ def gedai(
                 filt[b] = cleaned_band
                 sensai_scores.append(s_band)
                 thresholds.append(thr_band)
+                if verbose_timing:
+                    profiling.mark(f"band_done_{b}")
     cleaned = filt.sum(dim=0)
+
+    if verbose_timing:
+        profiling.mark("bands_summed")
 
     # trim back to original length if we padded
     if pad_right:
         cleaned = cleaned[:, :T_in]
 
     if skip_checks_and_return_cleaned_only:
+        if verbose_timing:
+            profiling.mark("done_return_cleaned_only")
+            profiling.report()
         return cleaned
     
     artifacts = eeg_ref[:, :cleaned.size(1)] - cleaned
@@ -291,6 +345,10 @@ def gedai(
         )
     except Exception:
         sensai_score = None
+
+    if verbose_timing:
+        profiling.mark("sensai_final")
+        profiling.report()
 
     return dict(
         cleaned=cleaned,

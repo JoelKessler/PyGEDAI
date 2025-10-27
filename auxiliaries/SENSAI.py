@@ -3,6 +3,7 @@ import numpy as np
 from typing import Tuple, Union
 
 from .clean_EEG import clean_eeg
+import profiling
 
 def _cov_matlab_like_batched(X: torch.Tensor, ddof: int = 1) -> torch.Tensor:
     """
@@ -88,6 +89,7 @@ def sensai(
             - SENSAI_score (float)
     """
     # Run GEDAI cleaning (unchanged)
+    profiling.mark("sensai_start")
     EEGout_data, EEG_artifacts_data, _ = clean_eeg(
         EEGdata_epoched=EEGdata_epoched.to(device=device, dtype=dtype),
         srate=float(srate),
@@ -130,11 +132,13 @@ def sensai(
     #  OPTIMIZATION 1: Batched covariance computation 
     cov_sig = _cov_matlab_like_batched(Sig_ep, ddof=1)  # (num_epochs, channels, channels)
     cov_res = _cov_matlab_like_batched(Res_ep, ddof=1)  # (num_epochs, channels, channels)
+    profiling.mark("sensai_cov_done")
 
     #  OPTIMIZATION 2: Batched eigenvalue decomposition 
     # torch.linalg.eigh natively supports batched input!
     wS, VS = torch.linalg.eigh(cov_sig)  # wS: (num_epochs, channels), VS: (num_epochs, channels, channels)
     wN, VN = torch.linalg.eigh(cov_res)  # wN: (num_epochs, channels), VN: (num_epochs, channels, channels)
+    profiling.mark("sensai_eigh_done")
 
     # Sort eigenvalues in descending order and select top_PCs eigenvectors
     idxS = torch.argsort(wS, dim=1, descending=True)  # (num_epochs, channels)
@@ -161,5 +165,6 @@ def sensai(
     SIGNAL_subspace_similarity = 100.0 * float(sig_sim.mean().item())
     NOISE_subspace_similarity = 100.0 * float(noi_sim.mean().item())
     SENSAI_score = SIGNAL_subspace_similarity - float(noise_multiplier) * NOISE_subspace_similarity
+    profiling.mark("sensai_done")
 
     return float(SIGNAL_subspace_similarity), float(NOISE_subspace_similarity), float(SENSAI_score)

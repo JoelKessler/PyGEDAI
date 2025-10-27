@@ -2,6 +2,7 @@ import torch
 from typing import Tuple, Callable
 from .SENSAI import sensai
 import math
+import profiling
 
 def _sign(x):
     #  https://numpy.org/devdocs/reference/generated/numpy.sign.html
@@ -134,6 +135,7 @@ def sensai_fminbnd(
 
     def objective(artifact_threshold: float) -> float:
         # minimize negative SENSAI
+        profiling.mark("sensai_fminbnd_objective_call")
         _, _, score = sensai(
             EEGdata_epoched=EEGdata_epoched,
             srate=srate,
@@ -150,5 +152,6 @@ def sensai_fminbnd(
         objective, minThreshold, maxThreshold,
         xtol=float(TolX), maxiter=500
     )
+    profiling.mark("sensai_fminbnd_done")
 
     return float(xopt), float(-fval)

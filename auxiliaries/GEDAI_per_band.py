@@ -1,5 +1,6 @@
 import torch
 from typing import List, Optional, Tuple, Union
+import profiling
 
 
 from .clean_EEG import clean_eeg
@@ -19,13 +20,16 @@ def gedai_per_band(
     *,
     device: Union[str, torch.device] = "cpu",
     dtype: torch.dtype = torch.float64,
-    skip_checks_and_return_cleaned_only: bool = False
+    skip_checks_and_return_cleaned_only: bool = False,
+    verbose_timing: bool = False,
 ):
     """
     PyTorch port of MATLAB GEDAI_per_band with numerical parity (batched, optimized).
     """
     if eeg_data is None:
         raise ValueError("Cannot process empty data.")
+    if verbose_timing:
+        profiling.mark("gedai_per_band_start")
     if skip_checks_and_return_cleaned_only:
         X = eeg_data
     else:
@@ -53,6 +57,8 @@ def gedai_per_band(
         EEGdata_epoched = X.unfold(dimension=1, size=epoch_samples, step=epoch_samples).permute(0, 2, 1).contiguous()
     else:
         EEGdata_epoched = torch.zeros((n_ch, epoch_samples, 0), device=device, dtype=dtype)
+    if verbose_timing:
+        profiling.mark("epoching_done")
     if shifting == 0 or X.size(1) <= 2 * shifting:
         EEGdata_epoched_2 = torch.zeros((n_ch, epoch_samples, 0), device=device, dtype=dtype)
     else:
@@ -69,10 +75,14 @@ def gedai_per_band(
         COV = _batch_cov_optimized(EEGdata_epoched, ddof=1)
     else:
         COV = torch.zeros((n_ch, n_ch, 0), device=device, dtype=dtype)
+    if verbose_timing:
+        profiling.mark("cov_computed")
     if EEGdata_epoched_2.size(2) > 0:
         COV_2 = _batch_cov_optimized(EEGdata_epoched_2, ddof=1)
     else:
         COV_2 = torch.zeros((n_ch, n_ch, 0), device=device, dtype=dtype)
+    if verbose_timing:
+        profiling.mark("cov2_computed")
     # Reference covariance regularization
     regularization_lambda = 0.05
     eps_stability = 1e-12
@@ -90,11 +100,15 @@ def gedai_per_band(
     else:
         Evec = torch.zeros((n_ch, n_ch, 0), device=device, dtype=dtype)
         Eval = torch.zeros((n_ch, n_ch, 0), device=device, dtype=dtype)
+    if verbose_timing:
+        profiling.mark("gevd_done")
     if COV_2.size(2) > 0:
         Evec_2, Eval_2 = _gevd_chol_batched(COV_2, refCOV_reg)
     else:
         Evec_2 = torch.zeros((n_ch, n_ch, 0), device=device, dtype=dtype)
         Eval_2 = torch.zeros((n_ch, n_ch, 0), device=device, dtype=dtype)
+    if verbose_timing:
+        profiling.mark("gevd2_done")
     # Artifact threshold determination
     if isinstance(artifact_threshold_type, str) and artifact_threshold_type.startswith("auto"):
         noise_multiplier = dict(auto=3.0, auto_plus=1.0, auto_minus=6.0).get(artifact_threshold_type.replace("+","_plus").replace("-","_minus"), 3.0)
@@ -106,6 +120,8 @@ def gedai_per_band(
                 refCOV_t, Eval, Evec,
                 noise_multiplier
             )
+            if verbose_timing:
+                profiling.mark("threshold_optimized")
         elif optimization_type == "grid":
             step = 0.1
             AutomaticThresholdSweep = torch.arange(
@@ -151,11 +167,15 @@ def gedai_per_band(
         strict_matlab=True, device=device, dtype=dtype, 
         skip_checks_and_return_cleaned_only=skip_checks_and_return_cleaned_only
     )
+    if verbose_timing:
+        profiling.mark("clean_eeg_1_done")
     cleaned_data_2, artifacts_data_2, _ = clean_eeg(
         EEGdata_epoched_2, srate, epoch_size, artifact_threshold, refCOV_t, Eval_2, Evec_2,
         strict_matlab=True, device=device, dtype=dtype, 
         skip_checks_and_return_cleaned_only=skip_checks_and_return_cleaned_only
     )
+    if verbose_timing:
+        profiling.mark("clean_eeg_2_done")
     cosine_weights = create_cosine_weights(n_ch, srate, epoch_size, True, device=device, dtype=dtype)
     size_reconstructed_2 = cleaned_data_2.size(1)
     sample_end = size_reconstructed_2 - shifting
@@ -173,12 +193,16 @@ def gedai_per_band(
         cleaned_data[:, sl] += cleaned_data_2
         if not skip_checks_and_return_cleaned_only:
             artifacts_data[:, sl] += artifacts_data_2
+    if verbose_timing:
+        profiling.mark("combine_done")
     if skip_checks_and_return_cleaned_only:
         return cleaned_data
     _, _, SENSAI_score = sensai(
         EEGdata_epoched, srate, epoch_size, artifact_threshold_out,
         refCOV_t, Eval, Evec, 1.0
     )
+    if verbose_timing:
+        profiling.mark("sensai_done")
     return cleaned_data, artifacts_data, float(SENSAI_score), float(artifact_threshold_out)
 
 def _batch_cov_optimized(X: torch.Tensor, ddof: int = 1) -> torch.Tensor:

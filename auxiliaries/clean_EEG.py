@@ -2,6 +2,7 @@ import torch
 import numpy as np
 from typing import Tuple, Optional
 from .create_cosine_weights import create_cosine_weights
+import profiling
 
 def clean_eeg(
     EEGdata_epoched: torch.Tensor,
@@ -40,6 +41,8 @@ def clean_eeg(
     rtype = dtype
     
     # Convert inputs to PyTorch tensors with the specified device and ctype
+    if profiling and hasattr(profiling, 'mark'):
+        profiling.mark("clean_eeg_start")
    
     if not skip_checks_and_return_cleaned_only:
         EEG = EEGdata_epoched.to(device=device, dtype=ctype)
@@ -113,6 +116,7 @@ def clean_eeg(
     # Compute masks for all epochs at once
     dvals_batched = Ev_batched.diagonal(dim1=1, dim2=2).abs().real
     mask_keep_batched = dvals_batched >= threshold_cutoff
+    profiling.mark("clean_eeg_masks_computed")
     
     # Zero out eigenvectors below threshold
     U_modified = U_batched.clone()
@@ -126,6 +130,7 @@ def clean_eeg(
     # Batched least squares
     U_H = U_batched.conj().transpose(-2, -1)
     sol_batched = torch.linalg.lstsq(U_H, artifacts_timecourses).solution
+    profiling.mark("clean_eeg_lstsq_done")
     
     # Batched subtraction
     cleaned_batched = EEG_batched - sol_batched
@@ -147,6 +152,7 @@ def clean_eeg(
     # RESHAPE AND RETURN
     cleaned_epoched = cleaned_batched.permute(1, 0, 2)
     cleaned_data = cleaned_epoched.contiguous().reshape(num_chans, -1).real.to(rtype)
+    profiling.mark("clean_eeg_reshaped")
     
     if not skip_checks_and_return_cleaned_only:
         artifacts_batched = sol_batched.permute(1, 0, 2)
