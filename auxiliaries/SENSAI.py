@@ -168,7 +168,11 @@ def sensai(
     VT_expanded = VT.unsqueeze(0).expand(num_epochs, -1, -1)
 
     #  OPTIMIZATION 3: Batched subspace similarity computation 
-    sig_sim = _cosprod_subspace_batched(VS_top, VT_expanded)  # (num_epochs,)
+    #sig_sim = _cosprod_subspace_batched(VS_top, VT_expanded)  # (num_epochs,)
+    M = torch.bmm(VS_top.transpose(1,2), VT_expanded)  # (batch, k, k)
+    sig_sim = torch.abs(torch.linalg.det(M))    
+    # Replaced sigsim
+    
     noi_sim = _cosprod_subspace_batched(VN_top, VT_expanded)  # (num_epochs,)
 
     # Compute final scores
