@@ -122,7 +122,7 @@ def gedai(
     batched=False,
     verbose_timing: bool = False,
     TolX: float = 1e-1,
-    maxiter: 500
+    maxiter: int = 500
 ) -> Union[Dict[str, Any], torch.Tensor]:
     """Run the GEDAI cleaning pipeline on raw or preprocessed EEG.
 
