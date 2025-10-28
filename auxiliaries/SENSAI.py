@@ -22,9 +22,6 @@ def _cov_matlab_like_batched(X: torch.Tensor, ddof: int = 1) -> torch.Tensor:
     # Batched covariance: (batch, channels, samples) @ (batch, samples, channels)
     cov = torch.bmm(Xm, Xm.transpose(1, 2)) / float(S - ddof)
     
-    eps = 1e-6
-    cov = cov + eps * torch.eye(cov.shape[1], device=cov.device, dtype=cov.dtype).unsqueeze(0)
-    
     return 0.5 * (cov + cov.transpose(1, 2))
 
 
