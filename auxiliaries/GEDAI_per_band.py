@@ -67,8 +67,10 @@ def gedai_per_band(
             EEGdata_epoched_2 = X2.unfold(1, epoch_samples, epoch_samples).permute(0, 2, 1)
         else:
             EEGdata_epoched_2 = torch.zeros((n_ch, epoch_samples, 0), device=device, dtype=dtype)
+
     N_epochs = EEGdata_epoched.size(2)
-    # Optimized Covariances (per epoch)
+
+    # batched covariances, shapes (C,C,E)
     if N_epochs > 0:
         COV = _batch_cov_optimized(EEGdata_epoched, ddof=1)
     else:
@@ -96,30 +98,24 @@ def gedai_per_band(
     # HARDENING: dead-epoch ridge
     if N_epochs > 0:
         trace = COV.diagonal(dim1=0, dim2=1).sum(dim=0)  # (E,)
-        dead = trace <= 0
+        dead = ~torch.isfinite(trace) | (trace <= 0)
         if bool(dead.any()):
-            print(
-                "[GEDAI] GEVD special case: dead epochs ridge added "
-                f"({int(dead.sum().item())}/{int(dead.numel())})"
-            )
+            print(f"[GEDAI] GEVD special case: dead epochs ridge added ({int(dead.sum().item())}/{int(dead.numel())})")
             I = torch.eye(n_ch, device=device, dtype=dtype).unsqueeze(-1) # (n_ch, n_ch, 1)
-            mask = dead.to(COV.dtype).view(1, 1, -1) # (1, 1, E)
-            COV = COV + (eps_stability * mean_eval) * (I * mask) # add only on dead epochs
+            mask = dead.to(COV.dtype).view(1, 1, -1)                        # (1, 1, E)
+            COV = COV + (eps_stability * mean_eval) * (I * mask)
 
     if EEGdata_epoched_2.size(2) > 0:
         trace2 = COV_2.diagonal(dim1=0, dim2=1).sum(dim=0)  # (E2,)
-        dead2 = trace2 <= 0
+        dead2 = ~torch.isfinite(trace2) | (trace2 <= 0)
         if bool(dead2.any()):
-            print(
-                "[GEDAI] GEVD special case: dead epochs ridge added (half-shift) "
-                f"({int(dead2.sum().item())}/{int(dead2.numel())})"
-            )
+            print(f"[GEDAI] GEVD special case: dead epochs ridge added (half-shift) ({int(dead2.sum().item())}/{int(dead2.numel())})")
             I2 = torch.eye(n_ch, device=device, dtype=dtype).unsqueeze(-1) # (n_ch, n_ch, 1)
             mask2 = dead2.to(COV_2.dtype).view(1, 1, -1) # (1, 1, E2)
-            COV_2 = COV_2 + (eps_stability * mean_eval) * (I2 * mask2) # add only on dead epochs
-    # HARDENING END: dead-epoch ridge
+            COV_2 = COV_2 + (eps_stability * mean_eval) * (I2 * mask2)
+    # HARDENING END
 
-    # Optimized GEVD per epoch
+    # GEVD (batched via Cholesky of refCOV), with SPD fallback
     if N_epochs > 0:
         Evec, Eval = _gevd_chol_batched(COV, refCOV_reg)
     else:
@@ -127,6 +123,7 @@ def gedai_per_band(
         Eval = torch.zeros((n_ch, n_ch, 0), device=device, dtype=dtype)
     if verbose_timing:
         profiling.mark("gevd_done")
+
     if COV_2.size(2) > 0:
         Evec_2, Eval_2 = _gevd_chol_batched(COV_2, refCOV_reg)
     else:
