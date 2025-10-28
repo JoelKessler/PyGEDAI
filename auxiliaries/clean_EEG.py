@@ -117,25 +117,58 @@ def clean_eeg(
     dvals_batched = Ev_batched.diagonal(dim1=1, dim2=2).abs().real
     mask_keep_batched = dvals_batched >= threshold_cutoff
     profiling.mark("clean_eeg_masks_computed")
-    
-    # Zero out eigenvectors below threshold
-    U_modified = U_batched.clone()
-    mask_expanded = mask_keep_batched.unsqueeze(1)
-    U_modified = U_modified * mask_expanded
-    
-    # Batched matrix operations
-    U_modified_H = U_modified.conj().transpose(-2, -1)
-    artifacts_timecourses = torch.bmm(U_modified_H, EEG_batched)
-    
-    # Batched least squares
-    U_H = U_batched.conj().transpose(-2, -1)
-    sol_batched = torch.linalg.lstsq(U_H, artifacts_timecourses).solution
-    profiling.mark("clean_eeg_lstsq_done")
-    
-    # Batched subtraction
-    cleaned_batched = EEG_batched - sol_batched
-    
-    # OPTIMIZED: VECTORIZED WINDOWING
+
+    # Detect epochs where all components are masked (degenerate)
+    components_kept_per_epoch = mask_keep_batched.sum(dim=1) # (num_epochs,)
+    bad_epochs = components_kept_per_epoch == 0 # (num_epochs,)
+
+    if bad_epochs.any():
+        good_epochs = ~bad_epochs
+
+        # Start with a copy of input; we'll fill cleaned values for good epochs
+        cleaned_batched = EEG_batched.clone()
+
+        if good_epochs.any():
+            # Process only good epochs through the normal path
+            U_good = U_batched[good_epochs] # (G, C, C)
+            EEG_good = EEG_batched[good_epochs] # (G, C, S)
+            mask_good = mask_keep_batched[good_epochs] # (G, C)
+
+            U_modified_good = U_good.clone()
+            U_modified_good = U_modified_good * mask_good.unsqueeze(1) # zero masked components
+
+            U_modified_H_good = U_modified_good.conj().transpose(-2, -1) # (G, C, C)
+            artifacts_timecourses_good = torch.bmm(U_modified_H_good, EEG_good) # (G, C, S)  [bmm shape constraints: (b,n,m) x (b,m,p) → (b,n,p)]  # docs: torch.bmm
+            # Solve least squares per epoch batch
+            U_H_good = U_good.conj().transpose(-2, -1) # (G, C, C)
+            sol_good = torch.linalg.lstsq(U_H_good, artifacts_timecourses_good).solution  # (G, C, S)  # docs: torch.linalg.lstsq
+
+            profiling.mark("clean_eeg_lstsq_done")
+
+            cleaned_good = EEG_good - sol_good # (G, C, S)
+            cleaned_batched[good_epochs] = cleaned_good
+
+            if not skip_checks_and_return_cleaned_only:
+                sol_batched = torch.zeros_like(EEG_batched) # (E, C, S)
+                sol_batched[good_epochs] = sol_good
+        else:
+            # All epochs are bad: true per-epoch graceful no-op, keep originals
+            if not skip_checks_and_return_cleaned_only:
+                sol_batched = torch.zeros_like(EEG_batched) # artifacts are zeros
+    else:
+        # All epochs have at least one kept component: original batched path
+        U_modified = U_batched.clone()
+        U_modified = U_modified * mask_keep_batched.unsqueeze(1)
+
+        U_modified_H = U_modified.conj().transpose(-2, -1)
+        artifacts_timecourses = torch.bmm(U_modified_H, EEG_batched)
+
+        U_H = U_batched.conj().transpose(-2, -1)
+        sol_batched = torch.linalg.lstsq(U_H, artifacts_timecourses).solution
+        profiling.mark("clean_eeg_lstsq_done")
+
+        cleaned_batched = EEG_batched - sol_batched
+        
     if num_epochs == 1:
         pass  # No windowing for single epoch
     elif num_epochs == 2:
