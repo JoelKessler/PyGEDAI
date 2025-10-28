@@ -88,16 +88,19 @@ def sensai(
             - NOISE_subspace_similarity (float)
             - SENSAI_score (float)
     """
-    # Run GEDAI cleaning (unchanged)
+    refCOV = refCOV.to(device=device, dtype=dtype)
+    Eval = Eval.to(device=device, dtype=dtype)
+    Evec = Evec.to(device=device, dtype=dtype)
+
     profiling.mark("sensai_start")
     EEGout_data, EEG_artifacts_data, _ = clean_eeg(
         EEGdata_epoched=EEGdata_epoched.to(device=device, dtype=dtype),
         srate=float(srate),
         epoch_size=float(epoch_size),
         artifact_threshold_in=float(artifact_threshold),
-        refCOV=refCOV.to(device=device, dtype=dtype),
-        Eval=Eval.to(device=device, dtype=dtype),
-        Evec=Evec.to(device=device, dtype=dtype),
+        refCOV=refCOV,
+        Eval=Eval,
+        Evec=Evec,
         strict_matlab=True,
         device=device,
         dtype=dtype,
