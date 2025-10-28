@@ -22,8 +22,8 @@ def _cov_matlab_like_batched(X: torch.Tensor, ddof: int = 1) -> torch.Tensor:
     # Batched covariance: (batch, channels, samples) @ (batch, samples, channels)
     cov = torch.bmm(Xm, Xm.transpose(1, 2)) / float(S - ddof)
     
-    # Hermitian symmetrization
-    return 0.5 * (cov + cov.transpose(1, 2))
+    # return cov  # X @ X^T is already symmetric
+    return cov
 
 
 def _cosprod_subspace_batched(U: torch.Tensor, V: torch.Tensor) -> torch.Tensor:
