@@ -232,15 +232,31 @@ def _gevd_chol_batched(A_batch: torch.Tensor, B: torch.Tensor) -> Tuple[torch.Te
     A_batch = A_batch.to(dtype=torch.float32)
     B = B.to(dtype=torch.float32)
     B = 0.5 * (B + B.T)
-    L = torch.linalg.cholesky(B)
-    A = A_batch.permute(2, 0, 1)
+
+    # Robust Cholesky, handle non-SPD cases without an exception and add jitter only when needed
+    L, info = torch.linalg.cholesky_ex(B)
+    if int(info) != 0:
+        print("[GEDAI] GEVD special case: cholesky jitter fallback (refCOV not SPD)")
+        I = torch.eye(n_ch, dtype=B.dtype, device=B.device)
+        # scale jitter by average diagonal magnitude; try a few times
+        eps = float(torch.diag(B).mean().clamp_min(1e-12)) * 1e-6
+        for _ in range(3):
+            B = B + eps * I
+            L, info = torch.linalg.cholesky_ex(B)
+            if int(info) == 0:
+                break
+            eps *= 10.0
+        if int(info) != 0:
+            raise RuntimeError("refCOV is not SPD even after jitter.")
+
+    A = A_batch.permute(2, 0, 1)                    # (E, n, n)
     L_expanded = L.unsqueeze(0).expand(n_epochs, -1, -1)
     Y = torch.linalg.solve_triangular(L_expanded, A, upper=False)
     S = torch.linalg.solve_triangular(L_expanded, Y.transpose(1, 2), upper=False).transpose(1, 2)
     S = 0.5 * (S + S.transpose(1, 2))
     w, Yev = torch.linalg.eigh(S)
     V = torch.linalg.solve_triangular(L_expanded.transpose(1, 2), Yev, upper=True)
-    D = torch.diag_embed(w) # (n_epochs, n_ch, n_ch)
+    D = torch.diag_embed(w)
     return V.permute(1, 2, 0), D.permute(1, 2, 0)
 
 def _movmean_optimized(x: torch.Tensor, k: int) -> torch.Tensor:
