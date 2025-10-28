@@ -37,10 +37,6 @@ def gedai_per_band(
         X = eeg_data.to(device=device, dtype=dtype)
     if X.ndim != 2:
         raise ValueError("Input EEG data must be a 2D matrix (channels x samples).")
-    if skip_checks_and_return_cleaned_only:
-        refCOV_t = refCOV
-    else:
-        refCOV_t = refCOV.to(device=device, dtype=dtype)
     n_ch = X.size(0)
     pnts = X.size(1)
     epoch_samples_float = srate * epoch_size
@@ -87,11 +83,11 @@ def gedai_per_band(
     # Reference covariance regularization
     regularization_lambda = 0.05
     eps_stability = 1e-12
-    evals = torch.linalg.eigvalsh(refCOV_t)
+    evals = torch.linalg.eigvalsh(refCOV)
     mean_eval = float(evals.mean().item())
     mean_eval = max(mean_eval, eps_stability)
     refCOV_reg = (
-        (1.0 - regularization_lambda) * refCOV_t
+        (1.0 - regularization_lambda) * refCOV
         + regularization_lambda * mean_eval * torch.eye(n_ch, device=device, dtype=dtype)
     )
     refCOV_reg = 0.5 * (refCOV_reg + refCOV_reg.T)
@@ -118,7 +114,7 @@ def gedai_per_band(
             optimal_artifact_threshold, _ = sensai_fminbnd(
                 minThreshold, maxThreshold,
                 EEGdata_epoched, srate, epoch_size,
-                refCOV_t, Eval, Evec,
+                refCOV, Eval, Evec,
                 noise_multiplier, TolX=TolX
             )
             if verbose_timing:
@@ -134,7 +130,7 @@ def gedai_per_band(
             for idx, thr in enumerate(AutomaticThresholdSweep):
                 S_sig, S_noise, S_score = sensai(
                     EEGdata_epoched, srate, epoch_size, float(thr.item()),
-                    refCOV_t, Eval, Evec,
+                    refCOV, Eval, Evec,
                     noise_multiplier
                 )
                 SIGNAL_subspace_similarity[idx] = float(S_sig)
@@ -164,14 +160,14 @@ def gedai_per_band(
             raise ValueError("artifact_threshold_type must be 'auto*' or numeric.") from e
     # Clean EEG data
     cleaned_data_1, artifacts_data_1, artifact_threshold_out = clean_eeg(
-        EEGdata_epoched, srate, epoch_size, artifact_threshold, refCOV_t, Eval, Evec,
+        EEGdata_epoched, srate, epoch_size, artifact_threshold, refCOV, Eval, Evec,
         strict_matlab=True, device=device, dtype=dtype, 
         skip_checks_and_return_cleaned_only=skip_checks_and_return_cleaned_only
     )
     if verbose_timing:
         profiling.mark("clean_eeg_1_done")
     cleaned_data_2, artifacts_data_2, _ = clean_eeg(
-        EEGdata_epoched_2, srate, epoch_size, artifact_threshold, refCOV_t, Eval_2, Evec_2,
+        EEGdata_epoched_2, srate, epoch_size, artifact_threshold, refCOV, Eval_2, Evec_2,
         strict_matlab=True, device=device, dtype=dtype, 
         skip_checks_and_return_cleaned_only=skip_checks_and_return_cleaned_only
     )
@@ -200,7 +196,7 @@ def gedai_per_band(
         return cleaned_data
     _, _, SENSAI_score = sensai(
         EEGdata_epoched, srate, epoch_size, artifact_threshold_out,
-        refCOV_t, Eval, Evec, 1.0
+        refCOV, Eval, Evec, 1.0
     )
     if verbose_timing:
         profiling.mark("sensai_done")
