@@ -72,23 +72,25 @@ def batch_gedai(
     def _one(eeg_idx: int) -> torch.Tensor:
         if verbose_timing:
             profiling.mark(f"one_start_idx_{eeg_idx}")
-
-        eeg_batch[eeg_idx] = gedai(
-            eeg_batch[eeg_idx], sfreq,
-            denoising_strength=denoising_strength,
-            epoch_size=epoch_size,
-            leadfield=leadfield,
-            wavelet_levels=wavelet_levels,
-            matlab_levels=matlab_levels,
-            chanlabels=chanlabels,
-            device=device,
-            dtype=dtype,
-            skip_checks_and_return_cleaned_only=True,
-            batched=True,
-            verbose_timing=bool(verbose_timing),
-            TolX=TolX,
-            maxiter=maxiter
-        )
+        try:
+            eeg_batch[eeg_idx] = gedai(
+                eeg_batch[eeg_idx], sfreq,
+                denoising_strength=denoising_strength,
+                epoch_size=epoch_size,
+                leadfield=leadfield,
+                wavelet_levels=wavelet_levels,
+                matlab_levels=matlab_levels,
+                chanlabels=chanlabels,
+                device=device,
+                dtype=dtype,
+                skip_checks_and_return_cleaned_only=True,
+                batched=True,
+                verbose_timing=bool(verbose_timing),
+                TolX=TolX,
+                maxiter=maxiter
+            )
+        except:
+            print(f"GEDAI failed for batch index {eeg_idx}. Returning unmodified data.")
 
         if verbose_timing:
             profiling.mark(f"one_end_idx_{eeg_idx}")
