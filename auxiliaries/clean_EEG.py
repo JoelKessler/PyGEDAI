@@ -63,12 +63,19 @@ def clean_eeg(
     Ev_b = Ev.movedim(2, 0)
     diag_all = Ev_b.diagonal(dim1=1, dim2=2).reshape(-1)
     
-    # Compute log-magnitudes
+    # Treat non-finite eigenvalues as zero magnitude
     magnitudes = diag_all.abs()
+    if not torch.isfinite(magnitudes).all():
+        magnitudes = torch.nan_to_num(magnitudes, nan=0.0, posinf=0.0, neginf=0.0)
+    if magnitudes.max() == 0:
+        # Graceful no-op: return input as "clean", zero artifacts
+        # EEG: (C, S, E) -> (C, S*E)
+        print("Graceful no-op: all eigenvalues are zero or non-finite.")
+        X = EEG.permute(0, 2, 1).reshape(EEG.size(0), -1).contiguous()
+        empty = torch.zeros_like(X)
+        return X, empty, float(artifact_threshold_in)
+
     positive_mask = magnitudes > 0
-    if not bool(torch.any(positive_mask)):
-        raise ValueError("All eigenvalue magnitudes are zero")
-    
     log_Eig_val_all = torch.log(magnitudes[positive_mask].real) + 100.0
     
     # ECDF computation
