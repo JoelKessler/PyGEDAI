@@ -8,8 +8,7 @@ def _sign(x):
     #  https://numpy.org/devdocs/reference/generated/numpy.sign.html
     return -1 if x < 0 else 0 if x == 0 else 1
 
-def _minimize_scalar_bounded(func, x1, x2, args=(),
-                             xtol=1e-5, maxiter=500):
+def _minimize_scalar_bounded(func, x1, x2, xtol=1e-5, maxiter=500):
     # https://github.com/scipy/scipy/blob/v1.16.2/scipy/optimize/_optimize.py#L2195-L2286
     """
     Options
@@ -41,7 +40,7 @@ def _minimize_scalar_bounded(func, x1, x2, args=(),
     nfc, xf = fulc, fulc
     rat = e = 0.0
     x = xf
-    fx = func(x, *args)
+    fx = func(x)
     num = 1
     fmin_data = (1, xf, fx)
     fu = float("inf")
@@ -87,7 +86,7 @@ def _minimize_scalar_bounded(func, x1, x2, args=(),
 
         si = _sign(rat) + (rat == 0)
         x = xf + si * max(abs(rat), tol1)
-        fu = func(x, *args)
+        fu = func(x)
         num += 1
 
         if fu <= fx:
@@ -130,7 +129,8 @@ def sensai_fminbnd(
     Evec: torch.Tensor,
     noise_multiplier: float,
     TolX: float = 1e-1, # tolerance for threshold optimization, default was 0.1 speed/accuracy trade-off
-    skip_checks_and_return_cleaned_only: bool = False
+    skip_checks_and_return_cleaned_only: bool = False,
+    maxiter: int = 500
 ) -> Tuple[float, float]:
     """MATLAB-style wrapper: returns (optimalThreshold, maxSENSAIScore)."""
 
@@ -152,7 +152,7 @@ def sensai_fminbnd(
 
     xopt, fval = _minimize_scalar_bounded(
         objective, minThreshold, maxThreshold,
-        xtol=float(TolX), maxiter=150
+        xtol=float(TolX), maxiter=maxiter
     )
     profiling.mark("sensai_fminbnd_done")
 

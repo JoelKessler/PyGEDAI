@@ -57,6 +57,7 @@ def batch_gedai(
     max_workers: int | None = None,
     verbose_timing: bool = False,
     TolX: float = 1e-1,
+    maxiter: int = 500
 ):
     if verbose_timing:
         profiling.reset()
@@ -85,7 +86,8 @@ def batch_gedai(
             skip_checks_and_return_cleaned_only=True,
             batched=True,
             verbose_timing=bool(verbose_timing),
-            TolX=TolX
+            TolX=TolX,
+            maxiter=maxiter
         )
 
         if verbose_timing:
@@ -120,6 +122,7 @@ def gedai(
     batched=False,
     verbose_timing: bool = False,
     TolX: float = 1e-1,
+    maxiter: 500
 ) -> Union[Dict[str, Any], torch.Tensor]:
     """Run the GEDAI cleaning pipeline on raw or preprocessed EEG.
 
@@ -202,7 +205,7 @@ def gedai(
     # broadband denoising uses the numpy-based helper and is returned as numpy
     cleaned_broadband, _, sensai_broadband, thresh_broadband = gedai_per_band(
         eeg_ref_proc, sfreq, None, "auto-", epoch_size_used, refCOV.to(device=device), "parabolic", False,
-        device=device, dtype=dtype, verbose_timing=bool(verbose_timing), TolX=TolX,
+        device=device, dtype=dtype, verbose_timing=bool(verbose_timing), TolX=TolX, maxiter=maxiter,
         skip_checks_and_return_cleaned_only=skip_checks_and_return_cleaned_only
     )
     if verbose_timing:
@@ -269,7 +272,7 @@ def gedai(
                 refCOV, "parabolic", False,
                 device=device, dtype=dtype, verbose_timing=bool(verbose_timing),
                 skip_checks_and_return_cleaned_only=skip_checks_and_return_cleaned_only,
-                TolX=TolX
+                TolX=TolX, maxiter=maxiter
             )
             return cleaned_band, None, None
         else:
@@ -278,7 +281,7 @@ def gedai(
                 refCOV, "parabolic", False,
                 device=device, dtype=dtype, verbose_timing=bool(verbose_timing),
                 skip_checks_and_return_cleaned_only=skip_checks_and_return_cleaned_only,
-                TolX=TolX
+                TolX=TolX, maxiter=maxiter
             )
             return cleaned_band, s_band, thr_band
         
