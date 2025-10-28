@@ -42,7 +42,7 @@ from auxiliaries.SENSAI_basic import sensai_basic
 from concurrent.futures import ThreadPoolExecutor
 
 def batch_gedai(
-    eeg_batch: Union[torch.Tensor, list[torch.Tensor]], # list if varying lengths
+    eeg_batch: torch.Tensor, # 3D tensor (batch_size, n_channels, n_samples)
     sfreq: float,
     denoising_strength: str = "auto",
     epoch_size: float = 1.0,
@@ -63,12 +63,9 @@ def batch_gedai(
         profiling.enable(True)
         profiling.mark("start_batch")
 
-    is_list = isinstance(eeg_batch, list)
-    if not is_list and eeg_batch.ndim != 3:
+    if eeg_batch.ndim != 3:
         raise ValueError("eeg_batch must be 3D (batch_size, n_channels, n_samples).")
-    if leadfield is None or (
-        is_list and leadfield.shape != (eeg_batch[0].shape[0], eeg_batch[0].shape[0])) or (
-        not is_list and leadfield.shape != (eeg_batch.shape[1], eeg_batch.shape[1])):
+    if leadfield is None or (leadfield.shape != (eeg_batch.shape[1], eeg_batch.shape[1])):
         raise ValueError("leadfield must be provided with shape (n_channels, n_channels).")
 
     def _one(eeg_idx: int) -> torch.Tensor:
@@ -95,10 +92,7 @@ def batch_gedai(
             profiling.mark(f"one_end_idx_{eeg_idx}")
         return True
 
-    if is_list:
-        eeg_idx_total = len(eeg_batch)
-    else:
-        eeg_idx_total = eeg_batch.size(0)
+    eeg_idx_total = eeg_batch.size(0)
     if not parallel:
         results = [_one(eeg_idx) for eeg_idx in range(eeg_idx_total)]
     else:
@@ -108,10 +102,7 @@ def batch_gedai(
         profiling.mark("batch_done")
         profiling.report()
 
-    if is_list:
-        return eeg_batch
-
-    return eeg_batch #torch.stack(results, dim=0).to(device=device)
+    return eeg_batch # cleaned batch
 
 def gedai(
     eeg: torch.Tensor,

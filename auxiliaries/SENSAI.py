@@ -132,6 +132,13 @@ def sensai(
     cov_res = _cov_matlab_like_batched(Res_ep, ddof=1)  # (num_epochs, channels, channels)
     profiling.mark("sensai_cov_done")
 
+    # Regularize to prevent singularity
+    eps = 1e-6
+    n_ch = cov_sig.shape[1]
+    eye = torch.eye(n_ch, device=cov_sig.device, dtype=cov_sig.dtype).unsqueeze(0)
+    cov_sig = cov_sig + eps * eye
+    cov_res = cov_res + eps * eye
+
     #  OPTIMIZATION 2: Batched eigenvalue decomposition 
     # torch.linalg.eigh natively supports batched input!
     wS, VS = torch.linalg.eigh(cov_sig)  # wS: (num_epochs, channels), VS: (num_epochs, channels, channels)
