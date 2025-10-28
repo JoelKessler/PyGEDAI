@@ -17,6 +17,7 @@ def gedai_per_band(
     refCOV: torch.Tensor,
     optimization_type: str,
     parallel: bool,
+    TolX: float = 1e-1,
     *,
     device: Union[str, torch.device] = "cpu",
     dtype: torch.dtype = torch.float32,
@@ -118,7 +119,7 @@ def gedai_per_band(
                 minThreshold, maxThreshold,
                 EEGdata_epoched, srate, epoch_size,
                 refCOV_t, Eval, Evec,
-                noise_multiplier
+                noise_multiplier, TolX=TolX
             )
             if verbose_timing:
                 profiling.mark("threshold_optimized")

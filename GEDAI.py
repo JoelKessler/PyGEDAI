@@ -56,6 +56,7 @@ def batch_gedai(
     parallel: bool = True,
     max_workers: int | None = None,
     verbose_timing: bool = False,
+    TolX: float = 1e-1,
 ):
     if verbose_timing:
         profiling.reset()
@@ -86,7 +87,8 @@ def batch_gedai(
             dtype=dtype,
             skip_checks_and_return_cleaned_only=True,
             batched=True,
-            verbose_timing=bool(verbose_timing)
+            verbose_timing=bool(verbose_timing),
+            TolX=TolX
         )
 
         if verbose_timing:
@@ -126,6 +128,7 @@ def gedai(
     skip_checks_and_return_cleaned_only: bool = False,
     batched=False,
     verbose_timing: bool = False,
+    TolX: float = 1e-1,
 ) -> Union[Dict[str, Any], torch.Tensor]:
     """Run the GEDAI cleaning pipeline on raw or preprocessed EEG.
 
@@ -208,7 +211,7 @@ def gedai(
     # broadband denoising uses the numpy-based helper and is returned as numpy
     cleaned_broadband, _, sensai_broadband, thresh_broadband = gedai_per_band(
         eeg_ref_proc, sfreq, None, "auto-", epoch_size_used, refCOV.to(device=device), "parabolic", False,
-        device=device, dtype=dtype, verbose_timing=bool(verbose_timing)
+        device=device, dtype=dtype, verbose_timing=bool(verbose_timing), TolX=TolX
     )
     if verbose_timing:
         profiling.mark("broadband_denoise")
@@ -273,14 +276,16 @@ def gedai(
                 band_sig, sfreq, None, denoising_strength, epoch_size_used, 
                 refCOV, "parabolic", False,
                 device=device, dtype=dtype, verbose_timing=bool(verbose_timing),
-                skip_checks_and_return_cleaned_only=skip_checks_and_return_cleaned_only
+                skip_checks_and_return_cleaned_only=skip_checks_and_return_cleaned_only,
+                TolX=TolX
             )
         else:
             cleaned_band, _, s_band, thr_band = gedai_per_band(
                 band_sig, sfreq, None, denoising_strength, epoch_size_used, 
                 refCOV, "parabolic", False,
                 device=device, dtype=dtype, verbose_timing=bool(verbose_timing),
-                skip_checks_and_return_cleaned_only=skip_checks_and_return_cleaned_only
+                skip_checks_and_return_cleaned_only=skip_checks_and_return_cleaned_only,
+                TolX=TolX
             )
             return cleaned_band, s_band, thr_band
         

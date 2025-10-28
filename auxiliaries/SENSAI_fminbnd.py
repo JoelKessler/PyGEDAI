@@ -129,7 +129,7 @@ def sensai_fminbnd(
     Eval: torch.Tensor,
     Evec: torch.Tensor,
     noise_multiplier: float,
-    TolX: float = 1e-1,
+    TolX: float = 1e-1, # tolerance for threshold optimization, default was 0.1 speed/accuracy trade-off
 ) -> Tuple[float, float]:
     """MATLAB-style wrapper: returns (optimalThreshold, maxSENSAIScore)."""
 
