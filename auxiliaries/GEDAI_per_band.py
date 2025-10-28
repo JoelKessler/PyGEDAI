@@ -55,7 +55,7 @@ def gedai_per_band(
     X = X[:, : epoch_samples * num_epochs]
     shifting = epoch_samples // 2
     if num_epochs > 0:
-        EEGdata_epoched = X.unfold(dimension=1, size=epoch_samples, step=epoch_samples).permute(0, 2, 1).contiguous()
+        EEGdata_epoched = X.unfold(dimension=1, size=epoch_samples, step=epoch_samples).permute(0, 2, 1)
     else:
         EEGdata_epoched = torch.zeros((n_ch, epoch_samples, 0), device=device, dtype=dtype)
     if verbose_timing:
@@ -67,7 +67,7 @@ def gedai_per_band(
         nE2 = int(X2.size(1) // epoch_samples)
         X2 = X2[:, : nE2 * epoch_samples]
         if nE2 > 0:
-            EEGdata_epoched_2 = X2.unfold(1, epoch_samples, epoch_samples).permute(0, 2, 1).contiguous()
+            EEGdata_epoched_2 = X2.unfold(1, epoch_samples, epoch_samples).permute(0, 2, 1)
         else:
             EEGdata_epoched_2 = torch.zeros((n_ch, epoch_samples, 0), device=device, dtype=dtype)
     N_epochs = EEGdata_epoched.size(2)

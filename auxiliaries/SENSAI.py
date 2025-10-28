@@ -22,6 +22,7 @@ def _cov_matlab_like_batched(X: torch.Tensor, ddof: int = 1) -> torch.Tensor:
     # Batched covariance: (batch, channels, samples) @ (batch, samples, channels)
     cov = torch.bmm(Xm, Xm.transpose(1, 2)) / float(S - ddof)
     
+    # Hermitian symmetrization
     return 0.5 * (cov + cov.transpose(1, 2))
 
 
@@ -122,8 +123,8 @@ def sensai(
 
     # Reshape to epochs: (C, T) -> (C, S, E) using unfold
     #  KEY OPTIMIZATION: Transpose to (E, C, S) for batched processing , single permute
-    Sig_ep = EEGout_data.unfold(1, epoch_samples, epoch_samples).permute(1, 0, 2).contiguous() # (num_epochs, channels, samples)
-    Res_ep = EEG_artifacts_data.unfold(1, epoch_samples, epoch_samples).permute(1, 0, 2).contiguous() # (num_epochs, channels, samples)
+    Sig_ep = EEGout_data.unfold(1, epoch_samples, epoch_samples).permute(1, 0, 2) # (num_epochs, channels, samples)
+    Res_ep = EEG_artifacts_data.unfold(1, epoch_samples, epoch_samples).permute(1, 0, 2) # (num_epochs, channels, samples)
 
 
     #  OPTIMIZATION 1: Batched covariance computation 
