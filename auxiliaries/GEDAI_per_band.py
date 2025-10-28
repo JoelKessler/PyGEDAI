@@ -115,7 +115,8 @@ def gedai_per_band(
                 minThreshold, maxThreshold,
                 EEGdata_epoched, srate, epoch_size,
                 refCOV, Eval, Evec,
-                noise_multiplier, TolX=TolX
+                noise_multiplier, TolX=TolX,
+                skip_checks_and_return_cleaned_only=skip_checks_and_return_cleaned_only
             )
             if verbose_timing:
                 profiling.mark("threshold_optimized")
@@ -131,7 +132,7 @@ def gedai_per_band(
                 S_sig, S_noise, S_score = sensai(
                     EEGdata_epoched, srate, epoch_size, float(thr.item()),
                     refCOV, Eval, Evec,
-                    noise_multiplier
+                    noise_multiplier, skip_checks_and_return_cleaned_only=skip_checks_and_return_cleaned_only
                 )
                 SIGNAL_subspace_similarity[idx] = float(S_sig)
                 NOISE_subspace_similarity[idx] = float(S_noise)
@@ -193,10 +194,10 @@ def gedai_per_band(
     if verbose_timing:
         profiling.mark("combine_done")
     if skip_checks_and_return_cleaned_only:
-        return cleaned_data
+        return cleaned_data, None, None, None
     _, _, SENSAI_score = sensai(
         EEGdata_epoched, srate, epoch_size, artifact_threshold_out,
-        refCOV, Eval, Evec, 1.0
+        refCOV, Eval, Evec, 1.0, skip_checks_and_return_cleaned_only=skip_checks_and_return_cleaned_only
     )
     if verbose_timing:
         profiling.mark("sensai_done")

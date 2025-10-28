@@ -37,21 +37,14 @@ def clean_eeg(
     Tuple containing cleaned data, artifact data, and the artifact threshold used.
     """
     # Determine complex and real data types based on the input dtype
-    ctype = torch.complex128 if dtype == torch.float32 else torch.complex64
     rtype = dtype
     
-    # Convert inputs to PyTorch tensors with the specified device and ctype
     if profiling and hasattr(profiling, 'mark'):
         profiling.mark("clean_eeg_start")
-   
-    if not skip_checks_and_return_cleaned_only:
-        EEG = EEGdata_epoched.to(device=device, dtype=ctype)
-        Ev = Eval.to(device=device, dtype=ctype)
-        U = Evec.to(device=device, dtype=ctype)
-    else:
-        EEG = EEGdata_epoched
-        Ev = Eval
-        U = Evec
+
+    EEG = EEGdata_epoched
+    Ev = Eval
+    U = Evec
     
     # Validate inputs
     if EEG.ndim != 3:

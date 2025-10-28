@@ -62,6 +62,7 @@ def sensai(
     *,
     device: Union[str, torch.device] = "cpu",
     dtype: torch.dtype = torch.float32,
+    skip_checks_and_return_cleaned_only: bool = False
 ) -> Tuple[float, float, float]:
     """
     Compute SENSAI score and subspace similarities - OPTIMIZED BATCHED VERSION.
@@ -104,6 +105,7 @@ def sensai(
         strict_matlab=True,
         device=device,
         dtype=dtype,
+        skip_checks_and_return_cleaned_only=False
     )
 
     num_chans = refCOV.size(0)

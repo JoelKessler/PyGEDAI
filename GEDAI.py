@@ -202,7 +202,8 @@ def gedai(
     # broadband denoising uses the numpy-based helper and is returned as numpy
     cleaned_broadband, _, sensai_broadband, thresh_broadband = gedai_per_band(
         eeg_ref_proc, sfreq, None, "auto-", epoch_size_used, refCOV.to(device=device), "parabolic", False,
-        device=device, dtype=dtype, verbose_timing=bool(verbose_timing), TolX=TolX
+        device=device, dtype=dtype, verbose_timing=bool(verbose_timing), TolX=TolX,
+        skip_checks_and_return_cleaned_only=skip_checks_and_return_cleaned_only
     )
     if verbose_timing:
         profiling.mark("broadband_denoise")
@@ -263,13 +264,14 @@ def gedai(
 
     def _call_gedai_band(band_sig):
         if skip_checks_and_return_cleaned_only:
-            return gedai_per_band(
+            cleaned_band, _, _, _ = gedai_per_band(
                 band_sig, sfreq, None, denoising_strength, epoch_size_used, 
                 refCOV, "parabolic", False,
                 device=device, dtype=dtype, verbose_timing=bool(verbose_timing),
                 skip_checks_and_return_cleaned_only=skip_checks_and_return_cleaned_only,
                 TolX=TolX
             )
+            return cleaned_band, None, None
         else:
             cleaned_band, _, s_band, thr_band = gedai_per_band(
                 band_sig, sfreq, None, denoising_strength, epoch_size_used, 
@@ -287,13 +289,16 @@ def gedai(
         if not batched:
             with ThreadPoolExecutor() as ex:
                 results = list(ex.map(_call_gedai_band, band_list))
-            for b, cleaned_band in enumerate(results):
+            for b, data in enumerate(results):
+                cleaned_band, _, _ = data
+
                 filt[b] = cleaned_band
             if verbose_timing:
                 profiling.mark("bands_denoised_parallel")
         else:
             for b, band in enumerate(band_list):
-                filt[b] = _call_gedai_band(band)
+                cleaned_band, _, _ = _call_gedai_band(band)
+                filt[b] = cleaned_band
             if verbose_timing:
                 profiling.mark("bands_denoised_serial")
     else:
