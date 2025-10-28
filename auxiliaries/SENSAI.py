@@ -122,12 +122,10 @@ def sensai(
     num_epochs = total_samples // epoch_samples
 
     # Reshape to epochs: (C, T) -> (C, S, E) using unfold
-    Sig_ep = EEGout_data.unfold(1, epoch_samples, epoch_samples).permute(0, 2, 1).contiguous()
-    Res_ep = EEG_artifacts_data.unfold(1, epoch_samples, epoch_samples).permute(0, 2, 1).contiguous()
-    
-    #  KEY OPTIMIZATION: Transpose to (E, C, S) for batched processing 
-    Sig_ep = Sig_ep.permute(2, 0, 1)  # (num_epochs, channels, samples)
-    Res_ep = Res_ep.permute(2, 0, 1)  # (num_epochs, channels, samples)
+    #  KEY OPTIMIZATION: Transpose to (E, C, S) for batched processing , single permute
+    Sig_ep = EEGout_data.unfold(1, epoch_samples, epoch_samples).permute(1, 0, 2).contiguous() # (num_epochs, channels, samples)
+    Res_ep = EEG_artifacts_data.unfold(1, epoch_samples, epoch_samples).permute(1, 0, 2).contiguous() # (num_epochs, channels, samples)
+
 
     #  OPTIMIZATION 1: Batched covariance computation 
     cov_sig = _cov_matlab_like_batched(Sig_ep, ddof=1)  # (num_epochs, channels, channels)
