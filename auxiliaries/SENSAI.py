@@ -108,7 +108,7 @@ def sensai(
     top_PCs_eff = min(int(top_PCs), num_chans)
 
     # Top eigenvectors of reference covariance (descending)
-    wT, VT = torch.linalg.eigh(refCOV.to(device=device, dtype=dtype))
+    wT, VT = torch.linalg.eigh(refCOV)
     idxT = torch.argsort(wT, descending=True)
     VT = VT[:, idxT][:, :top_PCs_eff]  # (channels, top_PCs)
 
