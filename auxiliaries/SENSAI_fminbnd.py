@@ -137,18 +137,22 @@ def sensai_fminbnd(
     def objective(artifact_threshold: float) -> float:
         # minimize negative SENSAI
         profiling.mark("sensai_fminbnd_objective_call")
-        _, _, score = sensai(
-            EEGdata_epoched=EEGdata_epoched,
-            srate=srate,
-            epoch_size=epoch_size,
-            artifact_threshold=float(artifact_threshold),
-            refCOV=refCOV,
-            Eval=Eval,
-            Evec=Evec,
-            noise_multiplier=noise_multiplier,
-            skip_checks_and_return_cleaned_only=skip_checks_and_return_cleaned_only
-        )
-        return -float(score)
+        try:
+            _, _, score = sensai(
+                EEGdata_epoched=EEGdata_epoched,
+                srate=srate,
+                epoch_size=epoch_size,
+                artifact_threshold=float(artifact_threshold),
+                refCOV=refCOV,
+                Eval=Eval,
+                Evec=Evec,
+                noise_multiplier=noise_multiplier,
+                skip_checks_and_return_cleaned_only=skip_checks_and_return_cleaned_only
+            )
+            return -float(score)
+        except Exception as e:
+            print("Objective found exception: Steering search away from threshold =", artifact_threshold)
+            return float("+inf")
 
     xopt, fval = _minimize_scalar_bounded(
         objective, minThreshold, maxThreshold,
