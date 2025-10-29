@@ -73,7 +73,9 @@ def batch_gedai(
         if verbose_timing:
             profiling.mark(f"one_start_idx_{eeg_idx}")
         try:
-            eeg_batch[eeg_idx] = gedai(
+            if verbose_timing:
+                profiling.mark(f"one_end_idx_{eeg_idx}")
+            return gedai(
                 eeg_batch[eeg_idx], sfreq,
                 denoising_strength=denoising_strength,
                 epoch_size=epoch_size,
@@ -91,10 +93,7 @@ def batch_gedai(
             )
         except:
             print(f"GEDAI failed for batch index {eeg_idx}. Returning unmodified data.")
-
-        if verbose_timing:
-            profiling.mark(f"one_end_idx_{eeg_idx}")
-        return True
+            return eeg_batch[eeg_idx]
 
     eeg_idx_total = eeg_batch.size(0)
     if not parallel:
@@ -102,11 +101,13 @@ def batch_gedai(
     else:
         with ThreadPoolExecutor(max_workers=max_workers) as ex:
             results = list(ex.map(_one, range(eeg_idx_total)))
+    cleaned_batch = torch.stack(results, dim=0)
+    
     if verbose_timing:
         profiling.mark("batch_done")
         profiling.report()
 
-    return eeg_batch # cleaned batch
+    return cleaned_batch # cleaned batch
 
 def gedai(
     eeg: torch.Tensor,
