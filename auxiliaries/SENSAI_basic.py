@@ -1,5 +1,6 @@
 import torch
 from typing import Tuple, Union
+import profiling
 
 def _cov_matlab_like(X: torch.Tensor, ddof: int = 1) -> torch.Tensor:
     """
@@ -15,7 +16,7 @@ def _cov_matlab_like(X: torch.Tensor, ddof: int = 1) -> torch.Tensor:
     torch.Tensor
         Covariance matrix.
     """
-    X = X.to(torch.float64)
+    X = X.to(torch.float32)
     S = X.size(1)
     if S <= ddof:
         raise ValueError(f"n_samples ({S}) must be > ddof ({ddof})")
@@ -53,7 +54,7 @@ def sensai_basic(
     regularization_lambda: float = 0.05,
     *,
     device: Union[str, torch.device] = "cpu",
-    dtype: torch.dtype = torch.float64,
+    dtype: torch.dtype = torch.float32,
 ) -> Tuple[float, float, float]:
     """
     Compute SENSAI score and subspace similarities.
@@ -78,7 +79,7 @@ def sensai_basic(
     device : Union[str, torch.device]
         Device for computation (e.g., 'cpu', 'cuda'). Default is 'cpu'.
     dtype : torch.dtype
-        Data type for computation. Default is torch.float64.
+        Data type for computation. Default is torch.float32.
 
     Returns:
     Tuple[float, float, float]
@@ -92,6 +93,7 @@ def sensai_basic(
         raise ValueError("signal/noise first dim must match refCOV rows (num_chans).")
 
     num_chans = refCOV.size(0)
+    profiling.mark("sensai_basic_start")
 
     # Check epoch length
     ep_len = float(srate) * float(epoch_size)
@@ -119,6 +121,7 @@ def sensai_basic(
 
     # Compute top eigenvectors of template covariance
     wT, VT = torch.linalg.eigh(Tref_reg)
+    profiling.mark("sensai_basic_template_eig")
     idxT = torch.argsort(wT, descending=True)
     VT = VT[:, idxT][:, :top_PCs]
 
@@ -146,6 +149,7 @@ def sensai_basic(
         VN = VN[:, idxN][:, :top_PCs]
         noi_sim[ep] = _cosprod_subspace(VN, VT)
 
+    profiling.mark("sensai_basic_epochs_done")
     SIGNAL_subspace_similarity = 100.0 * float(sig_sim.mean().item())
     NOISE_subspace_similarity = 100.0 * float(noi_sim.mean().item())
     SENSAI_score = SIGNAL_subspace_similarity - float(NOISE_multiplier) * NOISE_subspace_similarity

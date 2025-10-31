@@ -8,7 +8,7 @@ def create_cosine_weights(
     fullshift: bool,
     *,
     device: Union[str, torch.device] = "cpu",
-    dtype: torch.dtype = torch.float64,
+    dtype: torch.dtype = torch.float32,
 ) -> torch.Tensor:
     """
     Generate cosine weights for EEG data processing.
@@ -25,15 +25,13 @@ def create_cosine_weights(
     device : Union[str, torch.device], optional
         Device for computation (e.g., 'cpu', 'cuda'). Default is 'cpu'.
     dtype : torch.dtype, optional
-        Data type for computation. Default is torch.float64.
+        Data type for computation. Default is torch.float32.
 
     Returns:
     torch.Tensor
         A tensor of shape (channels, N) with cosine weights.
     """
-    srate_t = torch.tensor(float(srate), device=device, dtype=dtype)
-    epoch_t = torch.tensor(float(epoch_size), device=device, dtype=dtype)
-    N_float = srate_t * epoch_t
+    N_float = torch.tensor(float(srate) * float(epoch_size), dtype=dtype) 
     if not torch.isfinite(N_float):
         raise ValueError("srate*epoch_size must be finite.")
     N_round_t = torch.round(N_float)
