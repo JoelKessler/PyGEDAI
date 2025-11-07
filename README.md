@@ -198,7 +198,7 @@ This port follows the PolyForm Noncommercial License 1.0.0, identical to the ori
 
 ## Further Resources
 
-- `GEDAI.py`: Core implementation with inline comments describing the Haar MODWT pipeline, SEnSAI scoring, and artifact reconstruction.
+- `GEDAI.py`: Core implementation with inline comments describing the Haar MODWT pipeline, SENSAI scoring, and artifact reconstruction.
 - `auxiliaries/`: Helper modules including `GEDAI_per_band.py`, `SENSAI_basic.py`, and `clean_EEG.py`, which provide per-band denoisers and optimization routines.
 - `testing/HBN.ipynb`: Practical notebook demonstrating data loading, covariance handling, calls to `batch_gedai()`, and visualization of results.
 
