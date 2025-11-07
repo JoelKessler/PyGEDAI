@@ -1,3 +1,5 @@
+# License: PolyForm Noncommercial License 1.0.0 — see LICENSE for full terms.
+
 import torch
 
 def subspace_cosine_product(U: torch.Tensor, V: torch.Tensor) -> torch.Tensor:

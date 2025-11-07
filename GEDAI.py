@@ -1,3 +1,5 @@
+# License: PolyForm Noncommercial License 1.0.0 — see LICENSE for full terms.
+
 """GEDAI: Generalized Eigenvalue Deartifacting Instrument (Python port).
 
 This module implements the GEDAI pipeline using torch for numerical
@@ -9,7 +11,6 @@ top-level gedai function that runs the full cleaning pipeline.
 The implementation follows MATLAB MODWT conventions for analysis
 filters and provides an exact inverse in the frequency domain.
 """
-# TODO: Clarify with autor, If uneven number after halving epochs e.g. sfreq=125, epoch_size=1.0s, 250 samples -> 125 is uneven -> round up and return original shape?
 from __future__ import annotations
 
 import os

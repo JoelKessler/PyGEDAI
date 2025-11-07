@@ -129,6 +129,7 @@ def sensai_fminbnd(
     skip_checks_and_return_cleaned_only: bool = False,
     maxiter: int = 500
 ) -> Tuple[float, float]:
+    # License: PolyForm Noncommercial License 1.0.0 — see LICENSE for full terms.
     """
     MATLAB-style wrapper: returns (optimalThreshold, maxSENSAIScore).
 

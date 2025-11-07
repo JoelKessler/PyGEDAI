@@ -1,3 +1,5 @@
+# License: PolyForm Noncommercial License 1.0.0 — see LICENSE for full terms.
+
 import torch
 
 def gedai_non_rank_deficient_avg_ref(eeg: torch.Tensor) -> torch.Tensor:

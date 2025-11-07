@@ -1,3 +1,5 @@
+# License: PolyForm Noncommercial License 1.0.0 — see LICENSE for full terms.
+
 import torch
 
 def cov_matlab_like(X: torch.Tensor, ddof: int = 1) -> torch.Tensor:

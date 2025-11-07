@@ -1,3 +1,5 @@
+# License: PolyForm Noncommercial License 1.0.0 — see LICENSE for full terms.
+
 import torch
 import numpy as np
 from typing import Tuple, Union
