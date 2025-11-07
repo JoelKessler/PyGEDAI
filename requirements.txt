@@ -4,7 +4,10 @@ jupyterlab>=3.0
 torch 
 torchvision
 numpy
-mat73
 mne
 seaborn
 matplotlib
+
+setuptools
+wheel
+twine

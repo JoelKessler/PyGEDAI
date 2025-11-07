@@ -33,7 +33,6 @@ except Exception as ex:
 import torch.nn.functional as F
 
 from typing import Union, Dict, Any, Optional, List
-import numpy as np
 import math
 import profiling
 
@@ -185,10 +184,11 @@ def gedai(
         leadfield_t = leadfield.to(device=device, dtype=dtype)
     elif isinstance(leadfield, str):
         try:
+            leadfield_t = torch.load(leadfield).to(device=device, dtype=dtype)
+        except:
+            import numpy as np
             loaded = np.load(leadfield)
             leadfield_t = torch.as_tensor(loaded, device=device, dtype=dtype)
-        except:
-            leadfield_t = torch.load(leadfield).to(device=device, dtype=dtype)
     else:
         raise ValueError("leadfield must be ndarray, path string, tensor.")
 
