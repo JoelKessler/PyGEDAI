@@ -24,10 +24,7 @@ def sensai(
     skip_checks_and_return_cleaned_only: bool = False
 ) -> Tuple[float, float, float]:
     """
-    Compute SENSAI score and subspace similarities - OPTIMIZED BATCHED VERSION.
-    
-    This version eliminates the epoch loop by using batched tensor operations,
-    achieving 10-50x speedup over the original implementation.
+    Compute SENSAI score and subspace similarities - BATCHED VERSION.
     
     Parameters:
         EEGdata_epoched: Epoched EEG data (channels x samples)
@@ -47,6 +44,17 @@ def sensai(
             - SIGNAL_subspace_similarity (float)
             - NOISE_subspace_similarity (float)
             - SENSAI_score (float)
+
+    Explainer: 
+    1. Clean data into cleaned signal and extracted artifacts using clean_eeg.
+    2. Compare patterns to reference template (refCOV). Extract top 3 dominant PCs from refCOV.
+    3. Cleaned signal and artifats are split into epochs.
+    4. 
+        Evaluate similarity between dominant patterns in cleaned signale and compare to reference. (Signal similarity score)
+        Evaluate similarity between dominant patterns in artifacts and compare to reference. (Noise similarity score)
+    5. Compute SENSAI score as difference between signal similarity and noise similarity (weighted by noise_multiplier).
+        High score: Good cleaning of signal.
+        Low score: Poor cleaning performance, didn't separate well.
     """
     refCOV = refCOV.to(device=device, dtype=dtype)
     Eval = Eval.to(device=device, dtype=dtype)

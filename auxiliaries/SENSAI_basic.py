@@ -45,6 +45,11 @@ def sensai_basic(
     Returns:
     Tuple[float, float, float]
         SENSAI score, signal subspace similarity, and noise subspace similarity.
+
+    Explainer: 
+    Receive both cleaned signal and removed noise.
+    Then scores how well signal matches reference pattern and how much it differes from the noise pattern.
+    Bigger gap between these two indicate better cleaning performance.
     """
 
     # Validate input dimensions
