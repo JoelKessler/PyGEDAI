@@ -146,6 +146,19 @@ def gedai(
     The function returns a dictionary containing cleaned data,
     estimated artifacts, per-band sensai scores and thresholds, the
     epoch size actually used, and the reference covariance matrix.
+
+    Explainer:
+    Raw EEG data is fully cleaned by breaking it into frequency bands and cleaning each band.
+    Each frequency band contains different types of artifacts and neural signals.
+    Low frequencies e.g. eye movements, high frequencies e.g. muscle artifacts. Mid frequencies e.g. real brain signals (alpha, beta).
+
+    1. Load data and apply non rank deficient average reference. Pad data to full epochs.
+    2. Broadband denoising pass to remove gross artifacts. (all frequencies together)
+    3. MODWT decomposition into frequency bands using Haar wavelets. (Split cleaned broadband into wavelet_levels bands, 1 = muscle noise, 9 = drift).
+    4. Exclude very slow frequencies which ususally are just drift, exclude bottom bands.
+    5. For all bands in parallel identify artifacts and clean.
+    6. Reconstruct cleaned EEG by summing all cleaned bands.
+    7. Compute quality score.
     """
     if eeg is None:
         raise ValueError("eeg must be provided.")
