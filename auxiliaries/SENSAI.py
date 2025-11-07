@@ -3,7 +3,7 @@ import numpy as np
 from typing import Tuple, Union
 
 from .clean_EEG import clean_eeg
-from .subspace_angles import subspace_angles
+from .subspace_angles import subspace_cosine_product
 
 import profiling
 
@@ -151,7 +151,7 @@ def sensai(
     sig_sim = torch.abs(torch.linalg.det(M))    
     # Replaced sigsim
     
-    noi_sim = subspace_angles(VN_top, VT_expanded) # (num_epochs,)
+    noi_sim = subspace_cosine_product(VN_top, VT_expanded) # (num_epochs,)
 
     # Compute final scores
     SIGNAL_subspace_similarity = 100.0 * float(sig_sim.mean().item())

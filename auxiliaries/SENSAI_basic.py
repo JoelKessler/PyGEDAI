@@ -1,7 +1,7 @@
 import torch
 from typing import Tuple, Union
 import profiling
-from .subspace_angles import subspace_angles
+from .subspace_angles import subspace_cosine_product
 
 def _cov_matlab_like(X: torch.Tensor, ddof: int = 1) -> torch.Tensor:
     """
@@ -121,7 +121,7 @@ def sensai_basic(
         wS, VS = torch.linalg.eigh(cov_sig)
         idxS = torch.argsort(wS, descending=True)
         VS = VS[:, idxS][:, :top_PCs]
-        sig_sim[ep] = subspace_angles(VS, VT)
+        sig_sim[ep] = subspace_cosine_product(VS, VT)
 
         # Noise subspace
         N = Noi_ep[:, :, ep]
@@ -129,7 +129,7 @@ def sensai_basic(
         wN, VN = torch.linalg.eigh(cov_noi)
         idxN = torch.argsort(wN, descending=True)
         VN = VN[:, idxN][:, :top_PCs]
-        noi_sim[ep] = subspace_angles(VN, VT)
+        noi_sim[ep] = subspace_cosine_product(VN, VT)
 
     profiling.mark("sensai_basic_epochs_done")
     SIGNAL_subspace_similarity = 100.0 * float(sig_sim.mean().item())

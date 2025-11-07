@@ -1,21 +1,28 @@
 import torch
 
-def subspace_angles(U: torch.Tensor, V: torch.Tensor) -> torch.Tensor:
-    """Compute principal angles (in radians) between column subspaces of U and V.
-
-    This function calculates the principal angles between the column spaces of two matrices U and V.
-    The angles are returned in ascending order, and the function supports both real and complex inputs.
-
+def subspace_cosine_product(U: torch.Tensor, V: torch.Tensor) -> torch.Tensor:
+    """
+    Compute cosine-product subspace similarity between column spaces of U and V.
+    
+    Measures how similar two subspaces are by computing the product of cosines of 
+    their principal angles. Returns a value between 0 (orthogonal subspaces) and 1 
+    (identical subspaces).
+    
     Parameters:
-    - U: A torch.Tensor representing the first matrix. Columns should be orthonormal.
-    - V: A torch.Tensor representing the second matrix. Columns should be orthonormal.
-
+    - U: Tensor with orthonormal columns representing first subspace.
+         Shape: (n, k) or (batch, n, k)
+    - V: Tensor with orthonormal columns representing second subspace.
+         Shape: (n, k) or (batch, n, k)
+    
     Returns:
-    - A torch.Tensor containing the principal angles in radians as a column vector (k, 1).
-
+    - Similarity score(s):
+      * Python float if U and V are 2D
+      * Tensor of shape (batch,) if U and V are 3D
+    
     Notes:
-    - The function assumes that the columns of A and B are orthonormal.
-    - The computation is performed in float32 or complex128 precision for numerical stability.
+    - Assumes columns of U and V are orthonormal (e.g., from QR decomposition)
+    - Supports both real and complex tensors
+    - Uses fast determinant method for square cases, SVD for non-square
     """
     if U.dim() != V.dim():
         raise ValueError(f"U and V must have same #dims; got {U.dim()} vs {V.dim()}.")
