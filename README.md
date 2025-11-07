@@ -154,7 +154,7 @@ This mirrors the workflow shown in `testing/HBN.ipynb`, where the cleaned batch 
 - The `leadfield` parameter should be a reference covariance computed from a forward model of your montage. Precomputed examples are available in `leadfield_calibrated/`.
 - **Average referencing:** GEDAI applies a non-rank-deficient average reference (division by `n_channels + 1`) to avoid ICA ghost components—do not average-reference your data beforehand. See [Kim et al., 2023](https://doi.org/10.3389/frsip.2023.1064138) for background.
 - The default threshold search uses golden-section (`"parabolic"`). An optional debug mode (`"grid"`) exhaustively evaluates thresholds from 0.0 to 12.0 in 0.1 steps and is roughly 100× slower.
-- GEDAI typically processes ~1 s of 64-channel EEG in 0.5–2 s on CPU, depending on `wavelet_levels` and `denoising_strength`. GPU acceleration provides limited benefit because the matrices are modest in size.
+- GEDAI typically processes ~1 s of 64-channel EEG in 0.5–2 s on CPU, depending on `wavelet_levels` and `denoising_strength`. CPU execution is usually faster than GPU because the `sensai_fminbnd` minimization dominates runtime and benefits little from GPU acceleration.
 - Use `batch_gedai()` for multiple independent trials or subjects; with `parallel=True` and adequate CPU cores, throughput scales nearly linearly with batch size.
 - If thread-pool contention or hangs arise when running `batch_gedai()` in parallel mode, set single-threaded math libraries before importing torch:
   ```python
@@ -178,6 +178,7 @@ This mirrors the workflow shown in `testing/HBN.ipynb`, where the cleaned batch 
 - When running on GPU, move both EEG data and leadfield tensors to the target device prior to calling the API.
 - Enable `verbose_timing=True` during development to gather profiling markers such as `start_batch`, `modwt_analysis`, and `batch_done`.
 - If you only require cleaned signals, set `skip_checks_and_return_cleaned_only=True` to avoid collecting diagnostic metadata.
+- Automatic threshold selection relies on `sensai_fminbnd` (golden-section minimization) and may run up to `maxiter` iterations; supplying fixed thresholds dramatically reduces runtime.
 
 ---
 
@@ -191,7 +192,7 @@ When referencing this Python package, please also acknowledge that it ports the 
 
 ## License
 
-This port follows the PolyForm Noncommercial License 1.0.0, identical to the original GEDAI plugin. The core algorithms are patent pending; commercial use requires obtaining the appropriate license from the patent holders. See `LICENSE` for full terms and contact information.
+This port follows the PolyForm Noncommercial License 1.0.0, identical to the original GEDAI plugin. The core algorithms are patent pending; commercial use requires obtaining the appropriate license from the patent holders. See [LICENSE](LICENSE) for full terms and contact information.
 
 ---
 
