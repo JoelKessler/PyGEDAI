@@ -3,6 +3,8 @@ import numpy as np
 from typing import Tuple, Union
 
 from .clean_EEG import clean_eeg
+from .subspace_angles import subspace_angles
+
 import profiling
 
 def _cov_matlab_like_batched(X: torch.Tensor, ddof: int = 1) -> torch.Tensor:
@@ -24,30 +26,6 @@ def _cov_matlab_like_batched(X: torch.Tensor, ddof: int = 1) -> torch.Tensor:
     
     # Hermitian symmetrization
     return 0.5 * (cov + cov.transpose(1, 2))
-
-
-def _cosprod_subspace_batched(U: torch.Tensor, V: torch.Tensor) -> torch.Tensor:
-    """
-    Product of cosines of principal angles between span(U) and span(V).
-    Batched version.
-    
-    Args:
-        U: (batch, channels, top_PCs)
-        V: (batch, channels, top_PCs)
-    
-    Returns:
-        (batch,) tensor of similarity scores
-    """
-    # Batched matrix multiply: (batch, top_PCs, channels) @ (batch, channels, top_PCs)
-    M = torch.bmm(U.transpose(1, 2), V)  # (batch, top_PCs, top_PCs)
-    
-    # Batched singular values
-    s = torch.linalg.svdvals(M)  # (batch, top_PCs)
-    s = torch.clamp(s, 0.0, 1.0)
-    
-    # Product along the singular value dimension
-    return torch.prod(s, dim=1)  # (batch,)
-
 
 def sensai(
     EEGdata_epoched: torch.Tensor,
@@ -127,12 +105,12 @@ def sensai(
     num_epochs = total_samples // epoch_samples
 
     # Reshape to epochs: (C, T) -> (C, S, E) using unfold
-    #  KEY OPTIMIZATION: Transpose to (E, C, S) for batched processing , single permute
+    # KEY OPTIMIZATION: Transpose to (E, C, S) for batched processing, single permute
     Sig_ep = EEGout_data.unfold(1, epoch_samples, epoch_samples).permute(1, 0, 2) # (num_epochs, channels, samples)
     Res_ep = EEG_artifacts_data.unfold(1, epoch_samples, epoch_samples).permute(1, 0, 2) # (num_epochs, channels, samples)
 
 
-    #  OPTIMIZATION 1: Batched covariance computation 
+    # OPTIMIZATION: Batched covariance computation 
     cov_sig = _cov_matlab_like_batched(Sig_ep, ddof=1)  # (num_epochs, channels, channels)
     cov_res = _cov_matlab_like_batched(Res_ep, ddof=1)  # (num_epochs, channels, channels)
     profiling.mark("sensai_cov_done")
@@ -167,13 +145,13 @@ def sensai(
     # Expand VT for batched comparison: (channels, top_PCs) -> (num_epochs, channels, top_PCs)
     VT_expanded = VT.unsqueeze(0).expand(num_epochs, -1, -1)
 
-    #  OPTIMIZATION 3: Batched subspace similarity computation 
+    # OPTIMIZATION: Batched subspace similarity computation 
     #sig_sim = _cosprod_subspace_batched(VS_top, VT_expanded)  # (num_epochs,)
     M = torch.bmm(VS_top.transpose(1,2), VT_expanded)  # (batch, k, k)
     sig_sim = torch.abs(torch.linalg.det(M))    
     # Replaced sigsim
     
-    noi_sim = _cosprod_subspace_batched(VN_top, VT_expanded)  # (num_epochs,)
+    noi_sim = subspace_angles(VN_top, VT_expanded) # (num_epochs,)
 
     # Compute final scores
     SIGNAL_subspace_similarity = 100.0 * float(sig_sim.mean().item())

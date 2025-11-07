@@ -1,6 +1,7 @@
 import torch
 from typing import Tuple, Union
 import profiling
+from .subspace_angles import subspace_angles
 
 def _cov_matlab_like(X: torch.Tensor, ddof: int = 1) -> torch.Tensor:
     """
@@ -23,25 +24,6 @@ def _cov_matlab_like(X: torch.Tensor, ddof: int = 1) -> torch.Tensor:
     Xc = X - X.mean(dim=1, keepdim=True)
     cov = (Xc @ Xc.T) / float(S - ddof)
     return 0.5 * (cov + cov.T)
-
-def _cosprod_subspace(U: torch.Tensor, V: torch.Tensor) -> float:
-    """
-    Compute product of cosines of principal angles between subspaces.
-
-    Parameters:
-    U : torch.Tensor
-        Basis for the first subspace.
-    V : torch.Tensor
-        Basis for the second subspace.
-
-    Returns:
-    float
-        Product of singular values of U^T V.
-    """
-    M = U.T @ V
-    s = torch.linalg.svdvals(M)
-    s = torch.clamp(s, 0.0, 1.0)
-    return float(torch.prod(s).item())
 
 def sensai_basic(
     signal_data: torch.Tensor,
@@ -139,7 +121,7 @@ def sensai_basic(
         wS, VS = torch.linalg.eigh(cov_sig)
         idxS = torch.argsort(wS, descending=True)
         VS = VS[:, idxS][:, :top_PCs]
-        sig_sim[ep] = _cosprod_subspace(VS, VT)
+        sig_sim[ep] = subspace_angles(VS, VT)
 
         # Noise subspace
         N = Noi_ep[:, :, ep]
@@ -147,7 +129,7 @@ def sensai_basic(
         wN, VN = torch.linalg.eigh(cov_noi)
         idxN = torch.argsort(wN, descending=True)
         VN = VN[:, idxN][:, :top_PCs]
-        noi_sim[ep] = _cosprod_subspace(VN, VT)
+        noi_sim[ep] = subspace_angles(VN, VT)
 
     profiling.mark("sensai_basic_epochs_done")
     SIGNAL_subspace_similarity = 100.0 * float(sig_sim.mean().item())

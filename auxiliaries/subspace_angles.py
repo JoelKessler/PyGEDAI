@@ -1,15 +1,14 @@
 import torch
-from typing import Union
 
-def subspace_angles(A: torch.Tensor, B: torch.Tensor) -> torch.Tensor:
-    """Compute principal angles (in radians) between column subspaces of A and B.
+def subspace_angles(U: torch.Tensor, V: torch.Tensor) -> torch.Tensor:
+    """Compute principal angles (in radians) between column subspaces of U and V.
 
-    This function calculates the principal angles between the column spaces of two matrices A and B.
+    This function calculates the principal angles between the column spaces of two matrices U and V.
     The angles are returned in ascending order, and the function supports both real and complex inputs.
 
     Parameters:
-    - A: A torch.Tensor representing the first matrix. Columns should be orthonormal.
-    - B: A torch.Tensor representing the second matrix. Columns should be orthonormal.
+    - U: A torch.Tensor representing the first matrix. Columns should be orthonormal.
+    - V: A torch.Tensor representing the second matrix. Columns should be orthonormal.
 
     Returns:
     - A torch.Tensor containing the principal angles in radians as a column vector (k, 1).
@@ -18,25 +17,45 @@ def subspace_angles(A: torch.Tensor, B: torch.Tensor) -> torch.Tensor:
     - The function assumes that the columns of A and B are orthonormal.
     - The computation is performed in float32 or complex128 precision for numerical stability.
     """
-    if A.size(0) != B.size(0):
-        raise ValueError("A and B must have the same number of rows (ambient dimension).")
+    if U.dim() != V.dim():
+        raise ValueError(f"U and V must have same #dims; got {U.dim()} vs {V.dim()}.")
 
-    # Promote dtype to ensure MATLAB-like behavior for complex inputs
-    if A.is_complex() or B.is_complex():
-        dtype = torch.complex128
+    # Interpret shapes and normalize to batched form (b, n, k)
+    if U.dim() == 2:
+        n, k = U.shape
+        if V.shape != (n, k):
+            raise ValueError(f"Shape mismatch: U {U.shape} vs V {V.shape}.")
+        U_b = U.unsqueeze(0) # (1, n, k)
+        V_b = V.unsqueeze(0) # (1, n, k)
+        unbatched = True
+    elif U.dim() == 3:
+        if U.shape != V.shape:
+            raise ValueError(f"Batched shapes must match: U {U.shape} vs V {V.shape}.")
+        U_b, V_b = U, V
+        unbatched = False
     else:
-        dtype = torch.float32
+        raise ValueError("U and V must be 2D (n,k) or 3D (b,n,k).")
 
-    device = A.device
-    A = A.to(device=device, dtype=dtype)
-    B = B.to(device=device, dtype=dtype)
+    # Promote dtype (supports complex)
+    dtype = torch.result_type(U_b, V_b)
+    U_b = U_b.to(dtype)
+    V_b = V_b.to(dtype)
 
-    # Compute the Gram matrix G = A' * B (conjugate transpose for complex inputs)
-    G = A.conj().transpose(-2, -1) @ B if A.is_complex() else A.transpose(-2, -1) @ B
+    # Overlap matrices M = U^H V -> shape (b, k, k)
+    UH = U_b.transpose(-2, -1).conj()
+    M = UH @ V_b
 
-    # Compute singular values of G to derive principal angles
-    s = torch.linalg.svdvals(G)  # Singular values are sorted in descending order
-    s = torch.clamp(s.real, -1.0, 1.0)  # Clamp values to [-1, 1] to avoid numerical drift
-    angles = torch.acos(s)  # Compute angles in radians
-    angles, _ = torch.sort(angles)  # Sort angles in ascending order
-    return angles.unsqueeze(1)  # Return as a column vector (k, 1)
+    kU = U_b.shape[-1]
+    kV = V_b.shape[-1]
+
+    # Prefer fast |det(M)| when square; otherwise fall back to prod(svdvals)
+    if kU == kV:
+        scores = torch.linalg.det(M).abs() # (b,)
+    else:
+        svals = torch.linalg.svdvals(M).clamp_(0.0, 1.0) # (b, r) with r=min(kU,kV)
+        scores = torch.prod(svals, dim=-1) # (b,)
+
+    # Return type mirrors input rank
+    if unbatched:
+        return scores[0].item()
+    return scores.unsqueeze(1)  # Return as a column vector (k, 1)
