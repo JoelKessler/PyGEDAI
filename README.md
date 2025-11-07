@@ -168,10 +168,10 @@ This mirrors the workflow shown in `testing/HBN.ipynb`, where the cleaned batch 
 
   import torch
   try:
-      torch.set_num_threads(1)          # intra-op
-      torch.set_num_interop_threads(1)  # inter-op
+      torch.set_num_threads(1) # intra-op
+      torch.set_num_interop_threads(1) # inter-op
   except RuntimeError:
-      pass  # torch was already initialised
+      pass # torch was already initialised
   ```
   The `set_num_threads` calls must run before PyTorch initialises; future Python 3.14+ releases are expected to reduce the need for this workaround.
 - The pipeline enforces even epoch lengths. If the requested epoch and sampling rate yield an odd sample count, GEDAI pads before processing and trims afterward.
