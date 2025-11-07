@@ -4,18 +4,17 @@ This library implements the Generalized Eigenvalue De-Artifacting Instrument (GE
 
 ---
 
+## What GEDAI Does
+
+GEDAI (Generalized Eigenvalue De-Artifacting Instrument) is an unsupervised, theoretically-grounded algorithm that cleans highly contaminated EEG data by automatically separating brain signals from artifacts—without requiring clean reference data or expert supervision.
+
+---
+
 ## Background and References
 
 - Ros, T, Férat, V., Huang, Y., Colangelo, C., Kia S.M., Wolfers T., Vulliemoz, S., & Michela, A. (2025). *Return of the GEDAI: Unsupervised EEG Denoising based on Leadfield Filtering*. bioRxiv. https://doi.org/10.1101/2025.10.04.680449
 - Original MATLAB/EEGLAB plugin: https://github.com/neurotuning/GEDAI-master (this Python port follows the architecture and processing stages documented there).
 
----
-
-## Key Capabilities (per Ros et al., 2025)
-
-- Leadfield-filtered denoising that rejects activity inconsistent with the forward model without needing clean reference data.
-- Single-pass correction of contaminated epochs and bad channels while retaining neural components via the SENSAI criterion.
-- Competitive performance in synthetic and empirical artifact mixtures spanning EOG, EMG, and broadband noise, with demonstrated gains for ERP decoding and brain fingerprinting tasks.
 
 ---
 
@@ -53,7 +52,7 @@ Execute the GEDAI pipeline on a single EEG recording shaped `(channels, samples)
 
 - `eeg`: PyTorch tensor or array-like with shape `(channels, samples)`. For best performance convert to a torch tensor before calling.
 - `sfreq`: Sampling frequency in Hertz. Guides epoch sizing and band selection.
-- `leadfield`: `(channels, channels)` tensor, numpy array, or filepath pointing to a serialized covariance matrix that drives artifact estimation.
+- `leadfield`: `(channels, channels)` tensor, numpy array, or filepath pointing to a serialized covariance matrix that drives artifact estimation. The row and column order must match the EEG channel ordering because tensors carry no channel labels.
 
 ### Key Optional Parameters
 
@@ -106,7 +105,7 @@ Vectorize the GEDAI pipeline across a batch dimension. Input tensors must be sha
 
 - `eeg_batch`: PyTorch tensor containing EEG recordings arranged as `(batch, channels, samples)`.
 - `sfreq`: Sampling frequency shared across the batch.
-- `leadfield`: `(channels, channels)` reference covariance tensor reused for every batch element.
+- `leadfield`: `(channels, channels)` reference covariance tensor reused for every batch element. Ensure its row and column order mirrors the channel order in `eeg_batch`.
 
 ### Key Optional Parameters
 
@@ -140,6 +139,7 @@ This mirrors the workflow shown in `testing/HBN.ipynb`, where the cleaned batch 
 ## Tips and Troubleshooting
 
 - Ensure the leadfield covariance shape matches the EEG channel count. The functions raise a `ValueError` when dimensions disagree.
+- Double-check that the row and column order of the leadfield covariance matches your EEG channel order (e.g., channel index 0 in both tensors corresponds to C1); misalignment silently degrades cleaning quality.
 - The pipeline enforces even epoch lengths. If the requested epoch and sampling rate yield an odd sample count, GEDAI pads before processing and trims afterward.
 - When running on GPU, move both EEG data and leadfield tensors to the target device prior to calling the API.
 - Enable `verbose_timing=True` during development to gather profiling markers such as `start_batch`, `modwt_analysis`, and `batch_done`.
