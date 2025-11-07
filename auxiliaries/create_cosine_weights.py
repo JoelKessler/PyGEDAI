@@ -12,6 +12,10 @@ def create_cosine_weights(
 ) -> torch.Tensor:
     """
     Generate cosine weights for EEG data processing.
+    Used to prevent click artifacts at epoch edges. 
+    Start of epoch is weighted 0, end of epoch is weighted 1. (full signal = 1)
+    End of epoch ramp down to 0 again.
+    Ensures smooth transitions between epochs when concatenated. (Processing in epochs)
 
     Parameters:
     channels : Union[int, float]

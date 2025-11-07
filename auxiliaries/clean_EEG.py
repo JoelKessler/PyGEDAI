@@ -35,6 +35,15 @@ def clean_eeg(
 
     Returns:
     Tuple containing cleaned data, artifact data, and the artifact threshold used.
+
+    Explainer:
+    1. Break EEG into epochs to easier spot artifacts (localized in time).
+    2. Directions, main pattern recognition. What do all channels have in commmon?
+       High eigenvalue likely artifact, low strength likely brain signal.
+    3. Identify threshold by looking at eigenvalues. Outliers likely artifacts.
+    4. Remove artifcat frequencies. 
+    5. Reconstruct cleaned epoch by combining cleaned components. (Clean brain signal)
+    6. Boundaries may be a bit rough around the edges, for that reason apply cosine weights for smoothing. (Prevent clicking)
     """
     rtype = dtype
     

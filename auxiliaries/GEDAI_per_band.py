@@ -273,7 +273,7 @@ def _gevd_chol_batched(A_batch: torch.Tensor, B: torch.Tensor) -> Tuple[torch.Te
         if int(info) != 0:
             raise RuntimeError("refCOV is not SPD even after jitter.")
 
-    A = A_batch.permute(2, 0, 1)                    # (E, n, n)
+    A = A_batch.permute(2, 0, 1) # (E, n, n)
     L_expanded = L.unsqueeze(0).expand(n_epochs, -1, -1)
     Y = torch.linalg.solve_triangular(L_expanded, A, upper=False)
     S = torch.linalg.solve_triangular(L_expanded, Y.transpose(1, 2), upper=False).transpose(1, 2)
