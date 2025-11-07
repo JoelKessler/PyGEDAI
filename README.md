@@ -1,6 +1,21 @@
 # PyGEDAI Usage Guide
 
-This library implements the Generalized Eigenvalue Deartifacting Instrument (GEDAI) for EEG cleaning. The core API mirrors the original MATLAB tooling while embracing PyTorch tensors for efficient numerical work. This document provides a concise reference for integrating `gedai()` and `batch_gedai()` into your projects.
+This library implements the Generalized Eigenvalue De-Artifacting Instrument (GEDAI) for EEG cleaning. The core API mirrors the original MATLAB tooling while embracing PyTorch tensors for efficient numerical work. This document provides a concise reference for integrating `gedai()` and `batch_gedai()` into your projects while staying faithful to the algorithmic description in Ros et al. (2025).
+
+---
+
+## Background and References
+
+- Ros, T., Férat, V., Huang, Y., Colangelo, C., Kia, S. M., Wolfers, T., Vulliemoz, S., & Michela, A. (2025). *Return of the GEDAI: Unsupervised EEG Denoising based on Leadfield Filtering*. bioRxiv. https://doi.org/10.1101/2025.10.04.680449
+- Original MATLAB/EEGLAB plugin: https://github.com/neurotuning/GEDAI-master (this Python port follows the architecture and processing stages documented there).
+
+---
+
+## Key Capabilities (per Ros et al., 2025)
+
+- Leadfield-filtered denoising that rejects activity inconsistent with the forward model without needing clean reference data.
+- Single-pass correction of contaminated epochs and bad channels while retaining neural components via the SENSAI criterion.
+- Competitive performance in synthetic and empirical artifact mixtures spanning EOG, EMG, and broadband noise, with demonstrated gains for ERP decoding and brain fingerprinting tasks.
 
 ---
 
@@ -48,7 +63,7 @@ Execute the GEDAI pipeline on a single EEG recording shaped `(channels, samples)
 - `matlab_levels`: Alternative to `wavelet_levels`, recreating MATLAB level numbering with `2**matlab_levels + 1` bands. Leave `None` unless porting MATLAB scripts directly.
 - `chanlabels`: Placeholder for channel label remapping. Currently not implemented and raises an error when supplied.
 - `device`: Target torch device such as `"cpu"` or `"cuda"`. EEG data, leadfield, and internal buffers move to this device.
-- `dtype`: Torch dtype used during computation, defaulting to `torch.float32`.
+- `dtype`: Torch dtype used during computation, defaulting to `torch.float32` for a balanced memory and compute footprint; set `torch.float64` when maximum numerical accuracy is required and resources permit.
 - `skip_checks_and_return_cleaned_only`: When `True`, bypass validation and return only the cleaned tensor to reduce overhead.
 - `batched`: Internal flag used by `batch_gedai()`. Leave `False` in user-facing calls.
 - `verbose_timing`: Enables profiling markers emitted by `profiling.py`, useful for benchmarking.
