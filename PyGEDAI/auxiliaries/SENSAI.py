@@ -1,7 +1,6 @@
 # License: PolyForm Noncommercial License 1.0.0 — see LICENSE for full terms.
 
 import torch
-import numpy as np
 from typing import Tuple, Union
 
 from .clean_EEG import clean_eeg
@@ -113,7 +112,7 @@ def sensai(
     cov_sig = cov_sig + eps * eye
     cov_res = cov_res + eps * eye
 
-    #  OPTIMIZATION 2: Batched eigenvalue decomposition 
+    # OPTIMIZATION: Batched eigenvalue decomposition 
     # torch.linalg.eigh natively supports batched input!
     wS, VS = torch.linalg.eigh(cov_sig)  # wS: (num_epochs, channels), VS: (num_epochs, channels, channels)
     wN, VN = torch.linalg.eigh(cov_res)  # wN: (num_epochs, channels), VN: (num_epochs, channels, channels)

@@ -1,5 +1,5 @@
 import torch
-from typing import Tuple, Callable
+from typing import Tuple
 from .SENSAI import sensai
 import math
 import profiling

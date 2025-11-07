@@ -1,7 +1,7 @@
 # License: PolyForm Noncommercial License 1.0.0 — see LICENSE for full terms.
 
 import torch
-from typing import List, Optional, Tuple, Union
+from typing import List, Tuple, Union
 import profiling
 
 

@@ -6,6 +6,6 @@ setup(
     author="Joel Kessler",
     packages=find_packages(),
     install_requires=[
-        "torch>=1.8.0",
+        "torch>=2.8.0",
     ]
 )
