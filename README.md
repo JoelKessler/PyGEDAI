@@ -6,7 +6,7 @@ This library implements the Generalized Eigenvalue De-Artifacting Instrument (GE
 
 ## Background and References
 
-- Ros, T., Férat, V., Huang, Y., Colangelo, C., Kia, S. M., Wolfers, T., Vulliemoz, S., & Michela, A. (2025). *Return of the GEDAI: Unsupervised EEG Denoising based on Leadfield Filtering*. bioRxiv. https://doi.org/10.1101/2025.10.04.680449
+- Ros, T, Férat, V., Huang, Y., Colangelo, C., Kia S.M., Wolfers T., Vulliemoz, S., & Michela, A. (2025). *Return of the GEDAI: Unsupervised EEG Denoising based on Leadfield Filtering*. bioRxiv. https://doi.org/10.1101/2025.10.04.680449
 - Original MATLAB/EEGLAB plugin: https://github.com/neurotuning/GEDAI-master (this Python port follows the architecture and processing stages documented there).
 
 ---
@@ -144,6 +144,22 @@ This mirrors the workflow shown in `testing/HBN.ipynb`, where the cleaned batch 
 - When running on GPU, move both EEG data and leadfield tensors to the target device prior to calling the API.
 - Enable `verbose_timing=True` during development to gather profiling markers such as `start_batch`, `modwt_analysis`, and `batch_done`.
 - If you only require cleaned signals, set `skip_checks_and_return_cleaned_only=True` to avoid collecting diagnostic metadata.
+
+---
+
+## Citation
+
+Return of the GEDAI: Unsupervised EEG Denoising based on Leadfield Filtering (2025) [bioRxiv]. https://doi.org/10.1101/2025.10.04.680449
+
+Ros, T., Férat, V., Huang, Y., Colangelo, C., Kia, S. M., Wolfers, T., Vulliemoz, S., & Michela, A.
+
+When referencing this Python package, please also acknowledge that it ports the original MATLAB/EEGLAB plugin available at https://github.com/neurotuning/GEDAI-master.
+
+---
+
+## License
+
+This port follows the PolyForm Noncommercial License 1.0.0, identical to the original GEDAI plugin. The core algorithms are patent pending; commercial use requires obtaining the appropriate license from the patent holders. See `LICENSE` for full terms and contact information.
 
 ---
 
