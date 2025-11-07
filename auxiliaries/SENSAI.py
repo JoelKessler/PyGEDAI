@@ -4,28 +4,9 @@ from typing import Tuple, Union
 
 from .clean_EEG import clean_eeg
 from .subspace_angles import subspace_cosine_product
+from .cov import cov_matlab_like
 
 import profiling
-
-def _cov_matlab_like_batched(X: torch.Tensor, ddof: int = 1) -> torch.Tensor:
-    """
-    MATLAB-like covariance for batched X with shape (batch, channels, samples),
-    unbiased (ddof=1), Hermitian-symmetrized for stability.
-    Returns shape (batch, channels, channels)
-    """
-    X = X.to(torch.float32)
-    _, _, S = X.shape
-    if S <= ddof:
-        raise ValueError(f"n_samples ({S}) must be > ddof ({ddof})")
-    
-    # Demean across samples dimension
-    Xm = X - X.mean(dim=2, keepdim=True)  # (batch, channels, samples)
-    
-    # Batched covariance: (batch, channels, samples) @ (batch, samples, channels)
-    cov = torch.bmm(Xm, Xm.transpose(1, 2)) / float(S - ddof)
-    
-    # Hermitian symmetrization
-    return 0.5 * (cov + cov.transpose(1, 2))
 
 def sensai(
     EEGdata_epoched: torch.Tensor,
@@ -111,8 +92,8 @@ def sensai(
 
 
     # OPTIMIZATION: Batched covariance computation 
-    cov_sig = _cov_matlab_like_batched(Sig_ep, ddof=1)  # (num_epochs, channels, channels)
-    cov_res = _cov_matlab_like_batched(Res_ep, ddof=1)  # (num_epochs, channels, channels)
+    cov_sig = cov_matlab_like(Sig_ep, ddof=1)  # (num_epochs, channels, channels)
+    cov_res = cov_matlab_like(Res_ep, ddof=1)  # (num_epochs, channels, channels)
     profiling.mark("sensai_cov_done")
 
     # Regularize to prevent singularity

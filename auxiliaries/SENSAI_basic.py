@@ -2,28 +2,7 @@ import torch
 from typing import Tuple, Union
 import profiling
 from .subspace_angles import subspace_cosine_product
-
-def _cov_matlab_like(X: torch.Tensor, ddof: int = 1) -> torch.Tensor:
-    """
-    Compute covariance matrix similar to MATLAB's cov() with rowvar=False.
-
-    Parameters:
-    X : torch.Tensor
-        Input data matrix (channels x samples).
-    ddof : int
-        Delta degrees of freedom. Default is 1.
-
-    Returns:
-    torch.Tensor
-        Covariance matrix.
-    """
-    X = X.to(torch.float32)
-    S = X.size(1)
-    if S <= ddof:
-        raise ValueError(f"n_samples ({S}) must be > ddof ({ddof})")
-    Xc = X - X.mean(dim=1, keepdim=True)
-    cov = (Xc @ Xc.T) / float(S - ddof)
-    return 0.5 * (cov + cov.T)
+from .cov import cov_matlab_like
 
 def sensai_basic(
     signal_data: torch.Tensor,
@@ -117,7 +96,7 @@ def sensai_basic(
     for ep in range(E):
         # Signal subspace
         X = Sig_ep[:, :, ep]
-        cov_sig = _cov_matlab_like(X, ddof=1)
+        cov_sig = cov_matlab_like(X, ddof=1)
         wS, VS = torch.linalg.eigh(cov_sig)
         idxS = torch.argsort(wS, descending=True)
         VS = VS[:, idxS][:, :top_PCs]
@@ -125,7 +104,7 @@ def sensai_basic(
 
         # Noise subspace
         N = Noi_ep[:, :, ep]
-        cov_noi = _cov_matlab_like(N, ddof=1)
+        cov_noi = cov_matlab_like(N, ddof=1)
         wN, VN = torch.linalg.eigh(cov_noi)
         idxN = torch.argsort(wN, descending=True)
         VN = VN[:, idxN][:, :top_PCs]
