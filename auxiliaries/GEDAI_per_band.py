@@ -27,6 +27,19 @@ def gedai_per_band(
 ):
     """
     PyTorch port of MATLAB GEDAI_per_band with numerical parity (batched, optimized).
+    
+    Explainer: (Does a single cleaning pass)
+    1. Validate format of data.
+    2. Split data into epochs.
+    3. Shift epochs by half and recompute covariances. (Sliding window)
+    4. For each epoch compute how channels correlate with each other (covariance matrices).
+    5. Add smoothing to reference covariance to ensure numerical stability.
+    6. Fix epochs with no signal (dead epochs) by adding small ridge to covariance.
+    7. Extract dominant patterns in epochs with eignevalues/vectors (GEVD).
+    8. Determine threshold e.g. automatically using SENSAI score optimization.
+    9. Clean EEG data by removing artifactual components.
+    10. Reconstruct with crossfading (cosine weights) blending the epochs together smoothly.
+    11. Compute final SENSAI score (measure how well the data was cleaned).
     """
     if eeg_data is None:
         raise ValueError("Cannot process empty data.")
@@ -233,6 +246,12 @@ def _batch_cov_optimized(X: torch.Tensor, ddof: int = 1) -> torch.Tensor:
     """
     Batched MATLAB-like covariance for X (channels, samples, epochs).
     Returns (channels, channels, epochs).
+
+    Explainer:
+    Computes covariance matrices for multiple epochs in a batched manner.
+    For each epoch subtract mean and compute covariance to understand channel relationships.
+    Symmetrizes the covariance matrices to ensure numerical stability. (Rounding errors)
+    Return all covariances.
     """
     X = X.to(dtype=torch.float32)
     n_ch, n_samples, n_epochs = X.shape
@@ -251,6 +270,11 @@ def _gevd_chol_batched(A_batch: torch.Tensor, B: torch.Tensor) -> Tuple[torch.Te
     A_batch: (n_ch, n_ch, n_epochs)
     B: (n_ch, n_ch) - shared reference covariance
     Returns (V, D) with V: (n_ch, n_ch, n_epochs), D: (n_ch, n_ch, n_epochs)
+
+    Explainer:
+    For each epoch finds eigenvalues/vectors that show how different epoch is to reference.
+    Big eigenvalue = strong pattern in epoch not in reference (signal).
+    Adds small jitter if the math breaks and retries.
     """
     n_ch, _, n_epochs = A_batch.shape
     A_batch = A_batch.to(dtype=torch.float32)
@@ -273,7 +297,7 @@ def _gevd_chol_batched(A_batch: torch.Tensor, B: torch.Tensor) -> Tuple[torch.Te
         if int(info) != 0:
             raise RuntimeError("refCOV is not SPD even after jitter.")
 
-    A = A_batch.permute(2, 0, 1)                    # (E, n, n)
+    A = A_batch.permute(2, 0, 1) # (E, n, n)
     L_expanded = L.unsqueeze(0).expand(n_epochs, -1, -1)
     Y = torch.linalg.solve_triangular(L_expanded, A, upper=False)
     S = torch.linalg.solve_triangular(L_expanded, Y.transpose(1, 2), upper=False).transpose(1, 2)
@@ -286,6 +310,10 @@ def _gevd_chol_batched(A_batch: torch.Tensor, B: torch.Tensor) -> Tuple[torch.Te
 def _movmean_optimized(x: torch.Tensor, k: int) -> torch.Tensor:
     """
     Optimized centered moving mean using conv1d.
+
+    Smooths noisy signal by computing moving average.
+    Reduces noisyness from SENSAI score calculations when using different thresholds. 
+    Makes it more likely to find the true underlying pattern.
     """
     k = int(k)
     x = x.to(dtype=torch.float32)
@@ -312,6 +340,11 @@ def _movmean_optimized(x: torch.Tensor, k: int) -> torch.Tensor:
 def _findchangepts_mean_optimized(y: torch.Tensor, max_num_changes: int = 2) -> List[int]:
     """
     Optimized mean-shift change-point detection.
+
+    Explainer:
+    Places where signal suddenly changes. Splits signal into more and more segments.
+    Until it finds the best split points that minimize overall error.
+    Returns indices where abrupt changes occur. (Jumps in signal values. Find spike locations.)
     """
     if max_num_changes != 2:
         raise NotImplementedError("Only max_num_changes=2 is implemented.")
@@ -321,11 +354,13 @@ def _findchangepts_mean_optimized(y: torch.Tensor, max_num_changes: int = 2) -> 
         return []
     csum = torch.cumsum(torch.cat([y.new_zeros(1), y]), dim=0)
     csum2 = torch.cumsum(torch.cat([y.new_zeros(1), y * y]), dim=0)
+
     def seg_sse_batch(starts, ends):
         n_segs = ends - starts + 1
         sums = csum[ends + 1] - csum[starts]
         sums2 = csum2[ends + 1] - csum2[starts]
         return sums2 - (sums * sums) / n_segs.float()
+    
     best0 = ((csum2[n] - csum2[0]) - (csum[n] - csum[0])**2 / n).item()
     t_range = torch.arange(0, n - 1, device=y.device)
     left_sse = seg_sse_batch(torch.zeros_like(t_range), t_range)

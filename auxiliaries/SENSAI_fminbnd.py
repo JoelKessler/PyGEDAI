@@ -11,24 +11,21 @@ def _sign(x):
 def _minimize_scalar_bounded(func, x1, x2, xtol=1e-5, maxiter=500):
     # https://github.com/scipy/scipy/blob/v1.16.2/scipy/optimize/_optimize.py#L2195-L2286
     """
-    Options
-    -------
     maxiter : int
         Maximum number of iterations to perform.
     disp: int, optional
         If non-zero, print messages.
 
-        ``0`` : no message printing.
+        0 : no message printing.
 
-        ``1`` : non-convergence notification messages only.
+        1 : non-convergence notification messages only.
 
-        ``2`` : print a message on convergence too.
+        2 : print a message on convergence too.
 
-        ``3`` : print iteration results.
+        3 : print iteration results.
 
     xtol : float
-        Absolute error in solution `xopt` acceptable for convergence.
-
+        Absolute error in solution xopt acceptable for convergence.
     """
     if x1 > x2:
         raise ValueError("The lower bound exceeds the upper bound.")
@@ -132,7 +129,19 @@ def sensai_fminbnd(
     skip_checks_and_return_cleaned_only: bool = False,
     maxiter: int = 500
 ) -> Tuple[float, float]:
-    """MATLAB-style wrapper: returns (optimalThreshold, maxSENSAIScore)."""
+    """
+    MATLAB-style wrapper: returns (optimalThreshold, maxSENSAIScore).
+
+    Explainer:
+    Clean EEG manually sets an artifact threshold to deceide which eigenvalues are outliers, to remove artifacts.
+    If this is chosen to high many artifacts remain, if too low too much neural signal is removed.
+    This function optimizes this artifact threshold automatically by maximizing the SENSAI score.
+
+    1. Search range is defined by minThreshold and maxThreshold.
+    2. Uses optimization function to minimize the search in bad regions focusing only on good regions. 
+    3. Calculate the SENSAI score for each threshold candidate.
+    4. Stop when search is narrow enough (TolX) or max iterations reached (maxiter).
+    """
 
     def objective(artifact_threshold: float) -> float:
         # minimize negative SENSAI
