@@ -46,6 +46,97 @@ The notebook `testing/HBN.ipynb` covers an end-to-end example, including plots t
 
 ---
 
+## Deployment & Local Testing
+
+### Build source and wheel distributions
+
+Use the existing `setup.py` helper to create both source (`sdist`) and wheel (`bdist_wheel`) artifacts before publishing or sharing locally:
+
+```bash
+python setup.py sdist bdist_wheel
+```
+
+The resulting archives land in `dist/` and are ready for installation in any compatible Python environment.
+
+### Install into a fresh environment (example with conda)
+
+```bash
+conda create -n pygedai python=3.12 -y
+conda activate pygedai
+pip install mne
+pip install "torch==2.2.2"
+pip install "numpy==1.26.4"
+pip install dist/pygedai-0.1.0-py3-none-any.whl --force-reinstall
+```
+
+Adjust the Python version and dependency pins as needed for your platform (the above works well on Intel macOS).
+
+### Verify dependency versions
+
+```bash
+python - <<'PY'
+import torch, numpy as np
+print("torch:", torch.__version__, "numpy:", np.__version__)
+PY
+```
+
+No errors should be emitted; the versions printed should match your expectations.
+
+### Install from PyPI instead
+
+Once a release is published, install the public package (with optional Torch extras) directly:
+
+```bash
+pip install mne
+pip install "numpy==1.26.4"
+pip install "pygedai[torch]"
+```
+
+### Smoke-test the pipeline locally
+
+Run this script to ensure PyGEDAI processes bundled sample data end to end:
+
+```bash
+python - <<'PY'
+import pathlib
+import torch
+import mne
+import numpy as np
+from pygedai import gedai
+
+root = pathlib.Path.cwd()
+raw_filepath = root / "testing" / "samples" / "with_artifacts" / "artifact_jumps.set"
+print(raw_filepath)
+raw = mne.io.read_raw_eeglab(str(raw_filepath), preload=True)
+raw.set_eeg_reference(ref_channels="average", projection=False, verbose=False)
+
+device = "cuda" if torch.cuda.is_available() else "cpu"
+
+eeg = torch.from_numpy(raw.get_data(picks="eeg")).to(device=device, dtype=torch.float32)
+
+leadfield_filepath = root / "testing" / "leadfield_calibrated" / "leadfield4GEDAI_eeg_61ch.npy"
+leadfield = torch.from_numpy(np.load(str(leadfield_filepath))).to(device=device, dtype=torch.float32)
+
+result = gedai(
+  eeg,
+  sfreq=raw.info["sfreq"],
+  denoising_strength="auto",
+  epoch_size=1.0,
+  leadfield=leadfield,
+  device=device,
+)
+
+cleaned = result["cleaned"].detach().cpu().numpy()
+
+print("cleaned shape:", cleaned.shape)
+print("SENSAI score:", float(result["sensai_score"]))
+PY
+```
+
+Successful execution prints the cleaned array shape and a SENSAI quality score.
+
+---
+
 ## `gedai()`
 
 `gedai(eeg, sfreq, denoising_strength="auto", epoch_size=1.0, leadfield=None, *, wavelet_levels=9, matlab_levels=None, chanlabels=None, device="cpu", dtype=torch.float32, skip_checks_and_return_cleaned_only=False, batched=False, verbose_timing=False, TolX=1e-1, maxiter=500)`
