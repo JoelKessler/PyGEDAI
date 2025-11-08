@@ -63,6 +63,12 @@ python setup.py sdist bdist_wheel
 
 The resulting archives land in `dist/` and are ready for installation in any compatible Python environment.
 
+As a final step to publish the built artifacts to PyPI, upload them with Twine:
+
+```bash
+twine upload dist/*
+```
+
 ### Install into a fresh environment (example with conda)
 
 ```bash
