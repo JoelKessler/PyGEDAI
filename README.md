@@ -22,9 +22,15 @@ GEDAI (Generalized Eigenvalue De-Artifacting Instrument) is an unsupervised, the
 
 ## Quick Start
 
+Install from PyPI for a quick start:
+
+```bash
+pip install pygedai
+```
+
 ```python
 import torch
-from GEDAI import gedai, batch_gedai
+from pygedai import gedai, batch_gedai
 
 eeg = torch.load("test.pt") # (channels, samples)
 leadfield = torch.load("leadfield.pt") # (channels, channels)
@@ -42,7 +48,7 @@ cleaned_batch = batch_gedai(batch, sfreq=100.0, leadfield=leadfield)
 print(f"SENSAI quality score: {result['sensai_score']:.3f}")
 ```
 
-The notebook `testing/HBN.ipynb` covers an end-to-end example, including plots that compare raw and cleaned signals.
+The notebook `testing/Test.ipynb` covers an end-to-end example, including plots that compare raw and cleaned signals.
 
 ---
 
@@ -191,7 +197,7 @@ When `skip_checks_and_return_cleaned_only=True`, the function returns only the `
 1. Load or calculate a `(channels, channels)` leadfield covariance from `leadfield_calibrated/` or your own pipeline.
 2. Convert raw EEG to a torch tensor and send it to the intended device and dtype.
 3. Call `gedai(...)` and capture the cleaned signal along with diagnostics.
-4. Visualize the results using utilities such as `plot_eeg` in `testing/HBN.ipynb`.
+4. Visualize the results using utilities such as `plot_eeg` in `testing/Test.ipynb`.
 
 ---
 
@@ -234,7 +240,7 @@ batch = eeg_trial.unsqueeze(0)
 cleaned = batch_gedai(batch, sfreq=100.0, leadfield=leadfield, verbose_timing=True)
 ```
 
-This mirrors the workflow shown in `testing/HBN.ipynb`, where the cleaned batch is plotted against the raw recording.
+This mirrors the workflow shown in `testing/Test.ipynb`, where the cleaned batch is plotted against the raw recording.
 
 ---
 
@@ -291,6 +297,6 @@ This port follows the PolyForm Noncommercial License 1.0.0, identical to the ori
 
 - `GEDAI.py`: Core implementation with inline comments describing the Haar MODWT pipeline, SENSAI scoring, and artifact reconstruction.
 - `auxiliaries/`: Helper modules including `GEDAI_per_band.py`, `SENSAI_basic.py`, and `clean_EEG.py`, which provide per-band denoisers and optimization routines.
-- `testing/HBN.ipynb`: Practical notebook demonstrating data loading, covariance handling, calls to `batch_gedai()`, and visualization of results.
+- `testing/Test.ipynb`: Practical notebook demonstrating data loading, covariance handling, calls to `batch_gedai()`, and visualization of results.
 
 For issues or feature requests, please open a GitHub issue in this repository.
