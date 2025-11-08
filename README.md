@@ -32,7 +32,7 @@ pip install pygedai
 import torch
 from pygedai import gedai, batch_gedai
 
-eeg = torch.load("test.pt") # (channels, samples)
+eeg = torch.load("eeg.pt") # (channels, samples)
 leadfield = torch.load("leadfield.pt") # (channels, channels)
 
 # Clean a single recording
@@ -232,11 +232,11 @@ from pathlib import Path
 import torch
 
 project_root = Path.cwd()
-eeg_trial = torch.load(project_root / "testing" / "test.pt")
-leadfield = torch.load(project_root / "leadfield_calibrated" / "refCov_GSN_HydroCel_129.pt")
-
+eeg_trial = torch.load(project_root / "testing" / "samples" / "with_artifacts" / "artifact_jumps_tensor.pt")
+leadfield = torch.load()
+leadfield = torch.from_numpy(np.load(project_root / "testing" / "leadfield_calibrated" / "leadfield4GEDAI_eeg_61ch.npy")).to(device)
 batch = eeg_trial.unsqueeze(0)
-cleaned = batch_gedai(batch, sfreq=100.0, leadfield=leadfield, verbose_timing=True)
+cleaned = batch_gedai(batch, sfreq=125.0, leadfield=leadfield, verbose_timing=True)
 ```
 
 This mirrors the workflow shown in `testing/Test.ipynb`, where the cleaned batch is plotted against the raw recording.
