@@ -8,11 +8,11 @@ conda create -n pygedai python=3.12 -y # For e.g. older intel mac
 conda activate pygedai
 pip install "torch==2.2.2"
 pip install dist/pygedai-0.1.0-py3-none-any.whl --force-reinstall
-pip install mne
+pip install mne numpy
 
 ## Install from pip
 pip install "pygedai[torch]"
-pip install mne
+pip install mne numpy
 
 ## Test Locally
 python -c """
@@ -22,11 +22,11 @@ import mne
 from pygedai import gedai
 
 root = pathlib.Path.cwd()
-raw = mne.io.read_raw_eeglab(str(root / 'samples' / 'with_artifacts' / 'artifact_jumps.set'), preload=True)
+raw = mne.io.read_raw_eeglab(str(root / 'testing' / 'samples' / 'with_artifacts' / 'artifact_jumps.set'), preload=True)
 raw.set_eeg_reference(ref_channels='average', projection=False, verbose=False)
 eeg = torch.from_numpy(raw.get_data(picks='eeg'))
 
-leadfield = torch.from_numpy(np.load(root / 'leadfield_calibrated' / 'leadfield4GEDAI_eeg_61ch.npy'))
+leadfield = torch.from_numpy(np.load(root / 'testing' / 'leadfield_calibrated' / 'leadfield4GEDAI_eeg_61ch.npy'))
 
 result = gedai(eeg, sfreq=raw.info['sfreq'], leadfield=leadfield)
 
