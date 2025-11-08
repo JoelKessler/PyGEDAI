@@ -44,7 +44,6 @@ batch = eeg.unsqueeze(0) # add batch dimension
 cleaned_batch = batch_gedai(batch, sfreq=100.0, leadfield=leadfield)
 
 # result contains cleaned EEG, per-band thresholds, and SENSAI quality metrics
-# Typical SENSAI scores range from ~0.3 to 0.8 on cleanable data
 print(f"SENSAI quality score: {result['sensai_score']:.3f}")
 ```
 
