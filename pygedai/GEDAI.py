@@ -34,11 +34,11 @@ import torch.nn.functional as F
 
 from typing import Union, Dict, Any, Optional, List
 import math
-import profiling
 
-from auxiliaries.GEDAI_per_band import gedai_per_band
-from auxiliaries.SENSAI_basic import sensai_basic
-from auxiliaries.GEDAI_nonRankDeficientAveRef import gedai_non_rank_deficient_avg_ref
+from . import profiling
+from .auxiliaries.GEDAI_per_band import gedai_per_band
+from .auxiliaries.SENSAI_basic import sensai_basic
+from .auxiliaries.GEDAI_nonRankDeficientAveRef import gedai_non_rank_deficient_avg_ref
 
 from concurrent.futures import ThreadPoolExecutor
 
@@ -257,7 +257,14 @@ def gedai(
         artifacts = eeg_ref[:, :cleaned.size(1)] - cleaned
         try:
             sensai_score = float(
-                sensai_basic(cleaned, artifacts, float(sfreq), float(epoch_size_used), refCOV, 1.0)[0]
+                sensai_basic(
+                    cleaned, 
+                    artifacts, 
+                    float(sfreq), 
+                    float(epoch_size_used), 
+                    refCOV, 
+                    1.0,
+                    verbose_timing=verbose_timing)[0]
             )
         except Exception:
             sensai_score = None
@@ -354,7 +361,14 @@ def gedai(
 
     try:
         sensai_score = float(
-            sensai_basic(cleaned, artifacts, float(sfreq), float(epoch_size_used), refCOV, 1.0)[0]
+            sensai_basic(
+                cleaned, 
+                artifacts, 
+                float(sfreq), 
+                float(epoch_size_used), 
+                refCOV, 
+                1.0,
+                verbose_timing=verbose_timing)[0]
         )
     except Exception:
         sensai_score = None

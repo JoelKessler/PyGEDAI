@@ -2,7 +2,7 @@
 
 import torch
 from typing import List, Tuple, Union
-import profiling
+from .. import profiling
 
 
 from .clean_EEG import clean_eeg
@@ -157,7 +157,8 @@ def gedai_per_band(
                 refCOV, Eval, Evec,
                 noise_multiplier, TolX=TolX,
                 skip_checks_and_return_cleaned_only=skip_checks_and_return_cleaned_only,
-                maxiter=maxiter
+                maxiter=maxiter,
+                verbose_timing=verbose_timing
             )
             if verbose_timing:
                 profiling.mark("threshold_optimized")
@@ -173,7 +174,8 @@ def gedai_per_band(
                 S_sig, S_noise, S_score = sensai(
                     EEGdata_epoched, srate, epoch_size, float(thr.item()),
                     refCOV, Eval, Evec,
-                    noise_multiplier, skip_checks_and_return_cleaned_only=skip_checks_and_return_cleaned_only
+                    noise_multiplier, skip_checks_and_return_cleaned_only=skip_checks_and_return_cleaned_only,
+                    verbose_timing=verbose_timing
                 )
                 SIGNAL_subspace_similarity[idx] = float(S_sig)
                 NOISE_subspace_similarity[idx] = float(S_noise)
@@ -204,14 +206,16 @@ def gedai_per_band(
     cleaned_data_1, artifacts_data_1, artifact_threshold_out = clean_eeg(
         EEGdata_epoched, srate, epoch_size, artifact_threshold, refCOV, Eval, Evec,
         strict_matlab=True, device=device, dtype=dtype, 
-        skip_checks_and_return_cleaned_only=skip_checks_and_return_cleaned_only
+        skip_checks_and_return_cleaned_only=skip_checks_and_return_cleaned_only,
+        verbose_timing=verbose_timing
     )
     if verbose_timing:
         profiling.mark("clean_eeg_1_done")
     cleaned_data_2, artifacts_data_2, _ = clean_eeg(
         EEGdata_epoched_2, srate, epoch_size, artifact_threshold, refCOV, Eval_2, Evec_2,
         strict_matlab=True, device=device, dtype=dtype, 
-        skip_checks_and_return_cleaned_only=skip_checks_and_return_cleaned_only
+        skip_checks_and_return_cleaned_only=skip_checks_and_return_cleaned_only,
+        verbose_timing=verbose_timing
     )
     if verbose_timing:
         profiling.mark("clean_eeg_2_done")
@@ -238,7 +242,8 @@ def gedai_per_band(
         return cleaned_data, None, None, None
     _, _, SENSAI_score = sensai(
         EEGdata_epoched, srate, epoch_size, artifact_threshold_out,
-        refCOV, Eval, Evec, 1.0, skip_checks_and_return_cleaned_only=skip_checks_and_return_cleaned_only
+        refCOV, Eval, Evec, 1.0, skip_checks_and_return_cleaned_only=skip_checks_and_return_cleaned_only,
+        verbose_timing=verbose_timing
     )
     if verbose_timing:
         profiling.mark("sensai_done")

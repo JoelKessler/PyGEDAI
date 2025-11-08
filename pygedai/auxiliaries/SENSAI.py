@@ -7,7 +7,7 @@ from .clean_EEG import clean_eeg
 from .subspace_angles import subspace_cosine_product
 from .cov import cov_matlab_like
 
-import profiling
+from .. import profiling
 
 def sensai(
     EEGdata_epoched: torch.Tensor,
@@ -22,7 +22,8 @@ def sensai(
     *,
     device: Union[str, torch.device] = "cpu",
     dtype: torch.dtype = torch.float32,
-    skip_checks_and_return_cleaned_only: bool = False
+    skip_checks_and_return_cleaned_only: bool = False,
+    verbose_timing: bool = False
 ) -> Tuple[float, float, float]:
     """
     Compute SENSAI score and subspace similarities - BATCHED VERSION.
@@ -61,7 +62,8 @@ def sensai(
     Eval = Eval.to(device=device, dtype=dtype)
     Evec = Evec.to(device=device, dtype=dtype)
 
-    profiling.mark("sensai_start")
+    if verbose_timing:
+        profiling.mark("sensai_start")
     EEGout_data, EEG_artifacts_data, _ = clean_eeg(
         EEGdata_epoched=EEGdata_epoched.to(device=device, dtype=dtype),
         srate=float(srate),
@@ -73,7 +75,8 @@ def sensai(
         strict_matlab=True,
         device=device,
         dtype=dtype,
-        skip_checks_and_return_cleaned_only=False
+        skip_checks_and_return_cleaned_only=False,
+        verbose_timing=verbose_timing
     )
 
     num_chans = refCOV.size(0)
@@ -103,7 +106,8 @@ def sensai(
     # OPTIMIZATION: Batched covariance computation 
     cov_sig = cov_matlab_like(Sig_ep, ddof=1)  # (num_epochs, channels, channels)
     cov_res = cov_matlab_like(Res_ep, ddof=1)  # (num_epochs, channels, channels)
-    profiling.mark("sensai_cov_done")
+    if verbose_timing:
+        profiling.mark("sensai_cov_done")
 
     # Regularize to prevent singularity
     eps = 1e-6
@@ -116,7 +120,8 @@ def sensai(
     # torch.linalg.eigh natively supports batched input!
     wS, VS = torch.linalg.eigh(cov_sig)  # wS: (num_epochs, channels), VS: (num_epochs, channels, channels)
     wN, VN = torch.linalg.eigh(cov_res)  # wN: (num_epochs, channels), VN: (num_epochs, channels, channels)
-    profiling.mark("sensai_eigh_done")
+    if verbose_timing:
+        profiling.mark("sensai_eigh_done")
 
     # Sort eigenvalues in descending order and select top_PCs eigenvectors
     idxS = torch.argsort(wS, dim=1, descending=True)  # (num_epochs, channels)
@@ -147,6 +152,7 @@ def sensai(
     SIGNAL_subspace_similarity = 100.0 * float(sig_sim.mean().item())
     NOISE_subspace_similarity = 100.0 * float(noi_sim.mean().item())
     SENSAI_score = SIGNAL_subspace_similarity - float(noise_multiplier) * NOISE_subspace_similarity
-    profiling.mark("sensai_done")
+    if verbose_timing:
+        profiling.mark("sensai_done")
 
     return float(SIGNAL_subspace_similarity), float(NOISE_subspace_similarity), float(SENSAI_score)

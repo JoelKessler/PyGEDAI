@@ -3,7 +3,7 @@
 import torch
 from typing import Tuple, Optional
 from .create_cosine_weights import create_cosine_weights
-import profiling
+from .. import profiling
 
 def clean_eeg(
     EEGdata_epoched: torch.Tensor,
@@ -17,7 +17,8 @@ def clean_eeg(
     *,
     device: str | torch.device = "cpu",
     dtype: torch.dtype = torch.float32,
-    skip_checks_and_return_cleaned_only: bool = False
+    skip_checks_and_return_cleaned_only: bool = False,
+    verbose_timing: bool = False,
 ) -> Tuple[torch.Tensor, torch.Tensor, float]:
     """
     Clean EEG data using GEDAI methodology.
@@ -48,7 +49,7 @@ def clean_eeg(
     """
     rtype = dtype
     
-    if profiling and hasattr(profiling, 'mark'):
+    if verbose_timing:
         profiling.mark("clean_eeg_start")
 
     EEG = EEGdata_epoched
@@ -120,7 +121,8 @@ def clean_eeg(
     
     dvals_batched = Ev_batched.diagonal(dim1=1, dim2=2).abs().real
     mask_keep_batched = dvals_batched >= threshold_cutoff
-    profiling.mark("clean_eeg_masks_computed")
+    if verbose_timing:
+        profiling.mark("clean_eeg_masks_computed")
     components_kept_per_epoch = mask_keep_batched.sum(dim=1)
     bad_epochs = components_kept_per_epoch == 0
 
@@ -138,7 +140,10 @@ def clean_eeg(
         artifacts_timecourses_good = torch.bmm(U_modified_H_good, EEG_good)
         U_H_good = U_good.conj().transpose(-2, -1)
         sol_good = torch.linalg.lstsq(U_H_good, artifacts_timecourses_good).solution
-        profiling.mark("clean_eeg_lstsq_done")
+
+        if verbose_timing:
+            profiling.mark("clean_eeg_lstsq_done")
+
         cleaned_good = EEG_good - sol_good
         cleaned_batched[valid_bmm] = cleaned_good
         sol_batched[valid_bmm] = sol_good
@@ -160,7 +165,8 @@ def clean_eeg(
     # RESHAPE AND RETURN
     cleaned_epoched = cleaned_batched.permute(1, 0, 2)
     cleaned_data = cleaned_epoched.contiguous().reshape(num_chans, -1).real.to(rtype)
-    profiling.mark("clean_eeg_reshaped")
+    if verbose_timing:
+        profiling.mark("clean_eeg_reshaped")
     
     if not skip_checks_and_return_cleaned_only:
         artifacts_batched = sol_batched.permute(1, 0, 2)

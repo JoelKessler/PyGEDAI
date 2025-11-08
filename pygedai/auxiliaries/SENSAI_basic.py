@@ -2,7 +2,7 @@
 
 import torch
 from typing import Tuple, Union
-import profiling
+from .. import profiling
 from .subspace_angles import subspace_cosine_product
 from .cov import cov_matlab_like
 
@@ -18,6 +18,7 @@ def sensai_basic(
     *,
     device: Union[str, torch.device] = "cpu",
     dtype: torch.dtype = torch.float32,
+    verbose_timing: bool = False,
 ) -> Tuple[float, float, float]:
     """
     Compute SENSAI score and subspace similarities.
@@ -61,7 +62,8 @@ def sensai_basic(
         raise ValueError("signal/noise first dim must match refCOV rows (num_chans).")
 
     num_chans = refCOV.size(0)
-    profiling.mark("sensai_basic_start")
+    if verbose_timing:
+        profiling.mark("sensai_basic_start")
 
     # Check epoch length
     ep_len = float(srate) * float(epoch_size)
@@ -89,7 +91,8 @@ def sensai_basic(
 
     # Compute top eigenvectors of template covariance
     wT, VT = torch.linalg.eigh(Tref_reg)
-    profiling.mark("sensai_basic_template_eig")
+    if verbose_timing:
+        profiling.mark("sensai_basic_template_eig")
     idxT = torch.argsort(wT, descending=True)
     VT = VT[:, idxT][:, :top_PCs]
 
@@ -117,7 +120,8 @@ def sensai_basic(
         VN = VN[:, idxN][:, :top_PCs]
         noi_sim[ep] = subspace_cosine_product(VN, VT)
 
-    profiling.mark("sensai_basic_epochs_done")
+    if verbose_timing:
+        profiling.mark("sensai_basic_epochs_done")
     SIGNAL_subspace_similarity = 100.0 * float(sig_sim.mean().item())
     NOISE_subspace_similarity = 100.0 * float(noi_sim.mean().item())
     SENSAI_score = SIGNAL_subspace_similarity - float(NOISE_multiplier) * NOISE_subspace_similarity

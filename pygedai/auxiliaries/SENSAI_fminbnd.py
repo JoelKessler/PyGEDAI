@@ -2,7 +2,7 @@ import torch
 from typing import Tuple
 from .SENSAI import sensai
 import math
-import profiling
+from .. import profiling
 
 def _sign(x):
     #  https://numpy.org/devdocs/reference/generated/numpy.sign.html
@@ -127,7 +127,8 @@ def sensai_fminbnd(
     noise_multiplier: float,
     TolX: float = 1e-1, # tolerance for threshold optimization, default was 0.1 speed/accuracy trade-off
     skip_checks_and_return_cleaned_only: bool = False,
-    maxiter: int = 500
+    maxiter: int = 500,
+    verbose_timing: bool = False
 ) -> Tuple[float, float]:
     # License: PolyForm Noncommercial License 1.0.0 — see LICENSE for full terms.
     """
@@ -146,7 +147,8 @@ def sensai_fminbnd(
 
     def objective(artifact_threshold: float) -> float:
         # minimize negative SENSAI
-        profiling.mark("sensai_fminbnd_objective_call")
+        if verbose_timing:
+            profiling.mark("sensai_fminbnd_objective_call")
         try:
             _, _, score = sensai(
                 EEGdata_epoched=EEGdata_epoched,
@@ -157,7 +159,8 @@ def sensai_fminbnd(
                 Eval=Eval,
                 Evec=Evec,
                 noise_multiplier=noise_multiplier,
-                skip_checks_and_return_cleaned_only=skip_checks_and_return_cleaned_only
+                skip_checks_and_return_cleaned_only=skip_checks_and_return_cleaned_only,
+                verbose_timing=verbose_timing
             )
             return -float(score)
         except Exception as e:
@@ -168,6 +171,7 @@ def sensai_fminbnd(
         objective, minThreshold, maxThreshold,
         xtol=float(TolX), maxiter=maxiter
     )
-    profiling.mark("sensai_fminbnd_done")
+    if verbose_timing:
+        profiling.mark("sensai_fminbnd_done")
 
     return float(xopt), float(-fval)
