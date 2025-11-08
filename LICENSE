@@ -1,7 +1,9 @@
 This is the Original License Provided by
 https://github.com/neurotuning/GEDAI-master/blob/main/LICENSE
 
-This repository is a direct port of this library and I therefore may hold no ownership of any decisions related to it. Please contact the respective patent holders.
+This repository is a port of the original MATLAB GEDAI implementation. It aims to closely mirror the MATLAB version, but specific implementation steps may deviate where appropriate. The original license and terms are provided by the GEDAI project; please refer to the original source for authoritative licensing details. 
+
+I do NOT claim ownership over the original algorithms or design decisions from the upstream project. For any questions about rights or permissions, please contact the respective patent holders.
 
 Patent Notice: The core algorithms of [GEDAI] are patent pending. The license granted below pertains to the non-commercial software implementation 
 and does not automatically grant a license to the patented invention for commercial purposes.
