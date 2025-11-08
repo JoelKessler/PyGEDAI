@@ -1,10 +1,27 @@
 from setuptools import setup, find_packages
 
+with open("README.md", "r", encoding="utf-8") as fh:
+    long_description = fh.read()
+
 setup(
     name="pygedai",
-    version="0.1.0",
+    version="1.0.0",
     author="Joel Kessler",
+    license="PolyForm Noncommercial License 1.0.0",
     packages=find_packages(),
+    long_description=long_description,
+    long_description_content_type="text/markdown",
+    license_files=("LICENSE",),
+    classifiers=[
+        "License :: Other/Proprietary License",
+    ],
+    url="https://github.com/JoelKessler/PyGEDAI",
+    project_urls={
+        "Source": "https://github.com/JoelKessler/PyGEDAI",
+        "License": "https://github.com/JoelKessler/PyGEDAI/blob/main/LICENSE",
+        "Bug Tracker": "https://github.com/JoelKessler/PyGEDAI/issues",
+        "Documentation": "https://github.com/JoelKessler/PyGEDAI#readme",
+    },
     install_requires=[
         # pure-Python deps here, but NOT torch
     ],
