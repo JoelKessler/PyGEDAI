@@ -1,0 +1,13 @@
+mat73==0.65
+jupyter
+jupyterlab>=3.0
+torch 
+torchvision
+numpy
+mne
+seaborn
+matplotlib
+
+setuptools
+wheel
+twine
