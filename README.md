@@ -233,7 +233,6 @@ import torch
 
 project_root = Path.cwd()
 eeg_trial = torch.load(project_root / "testing" / "samples" / "with_artifacts" / "artifact_jumps_tensor.pt")
-leadfield = torch.load()
 leadfield = torch.from_numpy(np.load(project_root / "testing" / "leadfield_calibrated" / "leadfield4GEDAI_eeg_61ch.npy")).to(device)
 batch = eeg_trial.unsqueeze(0)
 cleaned = batch_gedai(batch, sfreq=125.0, leadfield=leadfield, verbose_timing=True)
