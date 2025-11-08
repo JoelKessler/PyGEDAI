@@ -35,12 +35,22 @@ raw_filepath = str(root / 'testing' / 'samples' / 'with_artifacts' / 'artifact_j
 print(raw_filepath)
 raw = mne.io.read_raw_eeglab(raw_filepath, preload=True)
 raw.set_eeg_reference(ref_channels='average', projection=False, verbose=False)
-eeg = torch.from_numpy(raw.get_data(picks='eeg'))
+
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
+
+eeg = torch.from_numpy(raw.get_data(picks='eeg')).to(device=device, dtype=torch.float32)
 
 leadfield_filepath = str(root / 'testing' / 'leadfield_calibrated' / 'leadfield4GEDAI_eeg_61ch.npy')
-leadfield = torch.from_numpy(np.load(leadfield_filepath))
+leadfield = torch.from_numpy(np.load(leadfield_filepath)).to(device=device, dtype=torch.float32)
 
-result = gedai(eeg, sfreq=raw.info['sfreq'], leadfield=leadfield)
+result = gedai(
+	eeg,
+	sfreq=raw.info['sfreq'],
+	denoising_strength='auto',
+	epoch_size=1.0,
+	leadfield=leadfield,
+	device=device,
+)
 
 cleaned = result['cleaned'].detach().cpu().numpy()
 
