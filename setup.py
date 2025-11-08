@@ -5,6 +5,7 @@ with open("README.md", "r", encoding="utf-8") as fh:
 
 setup(
     name="pygedai",
+    description="PyGEDAI: Generalized Eigenvalue De-Artifacting Instrument in PyTorch",
     version="1.0.0",
     author="Joel Kessler",
     license="PolyForm Noncommercial License 1.0.0",
@@ -14,6 +15,7 @@ setup(
     license_files=("LICENSE",),
     classifiers=[
         "License :: Other/Proprietary License",
+        "Intended Audience :: Science/Research"
     ],
     url="https://github.com/JoelKessler/PyGEDAI",
     project_urls={
