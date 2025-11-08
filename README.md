@@ -230,6 +230,7 @@ PyTorch tensor shaped `(batch, channels, samples)` containing the cleaned EEG fo
 ```python
 from pathlib import Path
 import torch
+from pygedai import batch_gedai
 
 project_root = Path.cwd()
 eeg_trial = torch.load(project_root / "testing" / "samples" / "with_artifacts" / "artifact_jumps_tensor.pt")
