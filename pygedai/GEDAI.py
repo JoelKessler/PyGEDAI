@@ -248,13 +248,13 @@ def gedai(
     
     if keep_upto <= 0:
         cleaned = cleaned_broadband
-        # trim back to original length if we padded
-        if pad_right:
-            cleaned = cleaned[:, :T_in]
         if skip_checks_and_return_cleaned_only:
+            # trim back to original length if we padded
+            if pad_right:
+                cleaned = cleaned[:, :T_in]
             return cleaned
         
-        artifacts = eeg_ref[:, :cleaned.size(1)] - cleaned
+        artifacts = eeg_ref_proc[:, :cleaned.size(1)] - cleaned
         try:
             sensai_score = float(
                 sensai_basic(
@@ -266,8 +266,13 @@ def gedai(
                     1.0,
                     verbose_timing=verbose_timing)[0]
             )
-        except Exception:
+        except Exception as ex:
             sensai_score = None
+            
+        # trim back to original length if we padded
+        if pad_right:
+            cleaned = cleaned[:, :T_in]
+            artifacts = artifacts[:, :T_in]
         return dict(
             cleaned=cleaned,
             artifacts=artifacts,
@@ -347,17 +352,16 @@ def gedai(
     if verbose_timing:
         profiling.mark("bands_summed")
 
-    # trim back to original length if we padded
-    if pad_right:
-        cleaned = cleaned[:, :T_in]
-
     if skip_checks_and_return_cleaned_only:
+        # trim back to original length if we padded
+        if pad_right:
+            cleaned = cleaned[:, :T_in]
         if verbose_timing:
             profiling.mark("done_return_cleaned_only")
             profiling.report()
         return cleaned
     
-    artifacts = eeg_ref[:, :cleaned.size(1)] - cleaned
+    artifacts = eeg_ref_proc[:, :cleaned.size(1)] - cleaned
 
     try:
         sensai_score = float(
@@ -370,8 +374,13 @@ def gedai(
                 1.0,
                 verbose_timing=verbose_timing)[0]
         )
-    except Exception:
+    except Exception as ex:
         sensai_score = None
+        
+    # trim back to original length if we padded
+    if pad_right:
+        cleaned = cleaned[:, :T_in]
+        artifacts = artifacts[:, :T_in]
 
     if verbose_timing:
         profiling.mark("sensai_final")

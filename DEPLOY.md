@@ -31,11 +31,14 @@ import numpy as np
 from pygedai import gedai
 
 root = pathlib.Path.cwd()
-raw = mne.io.read_raw_eeglab(str(root / 'testing' / 'samples' / 'with_artifacts' / 'artifact_jumps.set'), preload=True)
+raw_filepath = str(root / 'testing' / 'samples' / 'with_artifacts' / 'artifact_jumps.set')
+print(raw_filepath)
+raw = mne.io.read_raw_eeglab(raw_filepath, preload=True)
 raw.set_eeg_reference(ref_channels='average', projection=False, verbose=False)
 eeg = torch.from_numpy(raw.get_data(picks='eeg'))
 
-leadfield = torch.from_numpy(np.load(root / 'testing' / 'leadfield_calibrated' / 'leadfield4GEDAI_eeg_61ch.npy'))
+leadfield_filepath = str(root / 'testing' / 'leadfield_calibrated' / 'leadfield4GEDAI_eeg_61ch.npy')
+leadfield = torch.from_numpy(np.load(leadfield_filepath))
 
 result = gedai(eeg, sfreq=raw.info['sfreq'], leadfield=leadfield)
 
