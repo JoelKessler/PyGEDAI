@@ -6,19 +6,28 @@ python setup.py sdist bdist_wheel
 ## Install Locally
 conda create -n pygedai python=3.12 -y # For e.g. older intel mac
 conda activate pygedai
+pip install mne
 pip install "torch==2.2.2"
+pip install "numpy==1.26.4"
 pip install dist/pygedai-0.1.0-py3-none-any.whl --force-reinstall
-pip install mne numpy
+
+# Verify Local Environment works
+python - <<'PY'
+import torch, numpy as np; print("torch:", torch.__version__, "numpy:", np.__version__)
+PY
+No errors should be thrown.
 
 ## Install from pip
+pip install mne 
+pip install "numpy==1.26.4"
 pip install "pygedai[torch]"
-pip install mne numpy
 
 ## Test Locally
 python -c """
 import pathlib
 import torch
 import mne
+import numpy as np
 from pygedai import gedai
 
 root = pathlib.Path.cwd()
