@@ -31,7 +31,7 @@ try:
 except Exception as ex:
     print(ex)
 
-from typing import Union, Dict, Any, Optional, List
+from typing import Union, Dict, Any, Optional, List, Sequence
 import math
 import warnings
 
@@ -130,7 +130,8 @@ def gedai(
     batched=False,
     verbose_timing: bool = False,
     TolX: float = 1e-1,
-    maxiter: int = 500
+    maxiter: int = 500,
+    artifact_thresholds_override: Optional[Union[torch.Tensor, Sequence[float]]] = None,
 ) -> Union[Dict[str, Any], torch.Tensor]:
     """Run the GEDAI cleaning pipeline on raw or preprocessed EEG.
 
@@ -146,6 +147,8 @@ def gedai(
     - device / dtype: torch device and dtype for computation.
     - skip_checks_and_return_cleaned_only: if True, skips input validation
       and returns only the cleaned EEG tensor.
+        - artifact_thresholds_override: optional sequence/tensor of thresholds
+            (broadband first, followed by per-band) to reuse without re-optimizing.
 
     The function returns a dictionary containing cleaned data,
     estimated artifacts, per-band sensai scores and thresholds, the
@@ -227,12 +230,34 @@ def gedai(
     if verbose_timing:
         profiling.mark("padding_done")
 
+    override_list: Optional[List[float]] = None
+    if artifact_thresholds_override is not None:
+        if isinstance(artifact_thresholds_override, torch.Tensor):
+            flat = artifact_thresholds_override.detach().flatten().cpu().tolist()
+        else:
+            flat = list(artifact_thresholds_override)
+        override_list = [float(v) for v in flat]
+        if len(override_list) == 0:
+            raise ValueError("artifact_thresholds_override must contain at least one value.")
+
     # broadband denoising uses the numpy-based helper and is returned as numpy
+    broadband_threshold_override = None
+    if override_list is not None:
+        broadband_threshold_override = float(override_list[0])
+
+    broadband_threshold_arg: Union[str, float]
+    if broadband_threshold_override is None:
+        broadband_threshold_arg = "auto-"
+    else:
+        broadband_threshold_arg = broadband_threshold_override
+
     cleaned_broadband, _, sensai_broadband, thresh_broadband = gedai_per_band(
-        eeg_ref_proc, sfreq, None, "auto-", epoch_size_used, refCOV.to(device=device), "parabolic", False,
+        eeg_ref_proc, sfreq, None, broadband_threshold_arg, epoch_size_used, refCOV.to(device=device), "parabolic", False,
         device=device, dtype=dtype, verbose_timing=bool(verbose_timing), TolX=TolX, maxiter=maxiter,
         skip_checks_and_return_cleaned_only=skip_checks_and_return_cleaned_only
     )
+    if broadband_threshold_override is not None and thresh_broadband is None:
+        thresh_broadband = broadband_threshold_override
     if verbose_timing:
         profiling.mark("broadband_denoise")
     
@@ -332,6 +357,8 @@ def gedai(
         )
 
     # determine per-band epoch sizes based on cycle count
+    override_missing = False
+
     if num_bands_to_process > 0:
         freq_subset = lower_frequencies_tensor[:num_bands_to_process].to(torch.float64)
         sfreq_tensor = torch.as_tensor(float(sfreq), dtype=torch.float64, device=freq_subset.device)
@@ -365,11 +392,21 @@ def gedai(
         profiling.mark("prepare_band_processing")
 
     def _call_gedai_band(band_payload):
+        nonlocal override_missing
         band_idx, band_sig = band_payload
         current_epoch_size = epoch_sizes_per_wavelet_band[band_idx]
+        threshold_override = None
+        if override_list is not None:
+            override_position = band_idx + 1
+            if override_position < len(override_list):
+                threshold_override = float(override_list[override_position])
+            else:
+                override_missing = True
         if skip_checks_and_return_cleaned_only:
             cleaned_band, _, _, _ = gedai_per_band(
-                band_sig, sfreq, None, denoising_strength, current_epoch_size, 
+                band_sig, sfreq, None,
+                denoising_strength if threshold_override is None else threshold_override,
+                current_epoch_size, 
                 refCOV, "parabolic", False,
                 device=device, dtype=dtype, verbose_timing=bool(verbose_timing),
                 skip_checks_and_return_cleaned_only=skip_checks_and_return_cleaned_only,
@@ -378,7 +415,9 @@ def gedai(
             return band_idx, cleaned_band, None, None
         else:
             cleaned_band, _, s_band, thr_band = gedai_per_band(
-                band_sig, sfreq, None, denoising_strength, current_epoch_size, 
+                band_sig, sfreq, None,
+                denoising_strength if threshold_override is None else threshold_override,
+                current_epoch_size, 
                 refCOV, "parabolic", False,
                 device=device, dtype=dtype, verbose_timing=bool(verbose_timing),
                 skip_checks_and_return_cleaned_only=skip_checks_and_return_cleaned_only,
@@ -389,7 +428,7 @@ def gedai(
     band_list = [(b, bands_to_process[b]) for b in range(bands_to_process.size(0))]
 
     if skip_checks_and_return_cleaned_only:
-    # parallel map returning cleaned tensors
+        # parallel map returning cleaned tensors
         if not batched:
             with ThreadPoolExecutor() as ex:
                 results = list(ex.map(_call_gedai_band, band_list))
@@ -417,6 +456,13 @@ def gedai(
                 if verbose_timing:
                     profiling.mark(f"band_done_{band_idx}")
     cleaned = filt.sum(dim=0)
+
+    if override_list is not None and override_missing:
+        warnings.warn(
+            "artifact_thresholds_override provided fewer thresholds than required bands; "
+            "missing bands reverted to automatic threshold optimization.",
+            RuntimeWarning,
+        )
 
     if verbose_timing:
         profiling.mark("bands_summed")

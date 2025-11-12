@@ -19,6 +19,7 @@ dist
 PyGEDAI.egg-info
 # User-specific files (MonoDevelop/Xamarin Studio)
 *.userprefs
+GEDAI-master/
 
 # Mono auto generated files
 mono_crash.*
