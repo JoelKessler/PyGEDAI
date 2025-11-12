@@ -54,7 +54,7 @@ def gedai_per_band(
     if X.ndim != 2:
         raise ValueError("Input EEG data must be a 2D matrix (channels x samples).")
     n_ch = X.size(0)
-    pnts = X.size(1)
+    pnts_original = int(X.size(1))
     epoch_samples_float = srate * epoch_size
     if abs(epoch_samples_float - round(epoch_samples_float)) > 1e-12:
         raise ValueError("srate*epoch_size must yield an integer number of samples.")
@@ -63,8 +63,16 @@ def gedai_per_band(
         raise ValueError("epoch_samples must be positive.")
     if epoch_samples % 2 != 0:
         raise ValueError("epoch_samples must be even so shifting=epoch_samples/2 is integer.")
-    num_epochs = int(pnts // epoch_samples)
-    X = X[:, : epoch_samples * num_epochs]
+    remainder = pnts_original % epoch_samples
+    pad_right = epoch_samples - remainder if remainder else 0
+    if pad_right:
+        width = X.size(1)
+        if width <= 0:
+            raise ValueError("Cannot reflectively pad empty EEG data.")
+        repeats = (pad_right + width - 1) // width
+        padding = torch.flip(X, dims=[1]).repeat(1, repeats)[:, :pad_right]
+        X = torch.cat([X, padding], dim=1)
+    num_epochs = int(X.size(1) // epoch_samples)
     shifting = epoch_samples // 2
     if num_epochs > 0:
         EEGdata_epoched = X.unfold(dimension=1, size=epoch_samples, step=epoch_samples).permute(0, 2, 1)
@@ -238,6 +246,10 @@ def gedai_per_band(
             artifacts_data[:, sl] += artifacts_data_2
     if verbose_timing:
         profiling.mark("combine_done")
+    if pad_right:
+        cleaned_data = cleaned_data[:, :pnts_original]
+        if not skip_checks_and_return_cleaned_only:
+            artifacts_data = artifacts_data[:, :pnts_original]
     if skip_checks_and_return_cleaned_only:
         return cleaned_data, None, None, None
     _, _, SENSAI_score = sensai(

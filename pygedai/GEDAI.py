@@ -30,10 +30,10 @@ try:
     torch.set_num_interop_threads(1) # inter-op
 except Exception as ex:
     print(ex)
-import torch.nn.functional as F
 
 from typing import Union, Dict, Any, Optional, List
 import math
+import warnings
 
 from . import profiling
 from .auxiliaries.GEDAI_per_band import gedai_per_band
@@ -47,9 +47,10 @@ def batch_gedai(
     eeg_batch: torch.Tensor, # 3D tensor (batch_size, n_channels, n_samples)
     sfreq: float,
     denoising_strength: str = "auto",
-    epoch_size: float = 1.0,
     leadfield: torch.Tensor = None,
     *,
+    epoch_size_in_cycles: float = 12.0,
+    lowcut_frequency: float = 0.5,
     wavelet_levels: Optional[int] = 9,
     matlab_levels: Optional[int] = None,
     chanlabels: Optional[List[str]] = None,
@@ -80,7 +81,8 @@ def batch_gedai(
             return gedai(
                 eeg_batch[eeg_idx], sfreq,
                 denoising_strength=denoising_strength,
-                epoch_size=epoch_size,
+                epoch_size_in_cycles=epoch_size_in_cycles,
+                lowcut_frequency=lowcut_frequency,
                 leadfield=leadfield,
                 wavelet_levels=wavelet_levels,
                 matlab_levels=matlab_levels,
@@ -115,9 +117,10 @@ def gedai(
     eeg: torch.Tensor,
     sfreq: float,
     denoising_strength: str = "auto",
-    epoch_size: float = 1.0,
     leadfield: Union[str, torch.Tensor] = None,
     *,
+    epoch_size_in_cycles: float = 12.0,
+    lowcut_frequency: float = 0.5,
     wavelet_levels: Optional[int] = 9,
     matlab_levels: Optional[int] = None,
     chanlabels: Optional[List[str]] = None,
@@ -135,9 +138,9 @@ def gedai(
     - eeg: array-like or tensor shaped (n_channels, n_samples).
     - sfreq: sampling frequency in Hz.
     - denoising_strength: passed to per-band denoiser helpers.
-    - epoch_size: requested epoch duration in seconds; adjusted to an even
-      number of samples before processing.
     - leadfield: leadfield descriptor or matrix used to load reference covariance.
+    - epoch_size_in_cycles: number of wave cycles per wavelet band epoch (default 12).
+    - lowcut_frequency: exclude wavelet bands whose upper bound <= this frequency (Hz).
     - wavelet_levels / matlab_levels: level selection for MODWT analysis.
     - chanlabels: optional channel label list for leadfield mapping.
     - device / dtype: torch device and dtype for computation.
@@ -147,6 +150,8 @@ def gedai(
     The function returns a dictionary containing cleaned data,
     estimated artifacts, per-band sensai scores and thresholds, the
     epoch size actually used, and the reference covariance matrix.
+    - epoch_sizes_per_band: Tensor of per-band epoch durations (seconds) used during wavelet cleaning.
+    - lowcut_frequency_used: Low-cut frequency (Hz) applied to exclude low-frequency wavelet bands.
 
     Explainer:
     Raw EEG data is fully cleaned by breaking it into frequency bands and cleaning each band.
@@ -171,12 +176,16 @@ def gedai(
         raise NotImplementedError("chanlabels handling not implemented yet.")
     
     eeg = eeg.to(device=device, dtype=dtype)
+    epoch_size_in_cycles = float(epoch_size_in_cycles)
+    if epoch_size_in_cycles <= 0.0:
+        raise ValueError("epoch_size_in_cycles must be positive.")
 
     if verbose_timing:
         profiling.mark("start_gedai")
 
     n_ch = int(eeg.size(0))
-    epoch_size_used = _ensure_even_epoch_size(float(epoch_size), sfreq)
+    broadband_epoch_seconds = 1.0
+    epoch_size_used = _ensure_even_epoch_size(broadband_epoch_seconds, sfreq)
 
     if verbose_timing:
         profiling.mark("post_checks")
@@ -213,10 +222,7 @@ def gedai(
     epoch_samp = int(round(epoch_size_used * sfreq))  # e.g., 126 when enforcing even samples at 125 Hz
     rem = T_in % epoch_samp
     pad_right = (epoch_samp - rem) if rem != 0 else 0
-    if pad_right:
-        eeg_ref_proc = F.pad(eeg_ref, (0, pad_right), mode="replicate")  # e.g., 251 -> 252
-    else:
-        eeg_ref_proc = eeg_ref
+    eeg_ref_proc = _pad_reflect_tail(eeg_ref, pad_right)
 
     if verbose_timing:
         profiling.mark("padding_done")
@@ -243,11 +249,49 @@ def gedai(
     if verbose_timing:
         profiling.mark("mra_constructed")
     
-    # exclude lowest-frequency bands based on sampling rate
-    exclude = int(torch.ceil(torch.tensor(600.0 / sfreq)).item())
-    keep_upto = bands.size(0) - exclude
-    
-    if keep_upto <= 0:
+    # frequency bookkeeping for wavelet bands
+    num_bands_total = int(bands.size(0))
+    freq_dtype = torch.float64 if cleaned_broadband.dtype == torch.float64 else torch.float32
+    levels = torch.arange(1, num_bands_total + 1, device=cleaned_broadband.device, dtype=freq_dtype)
+    denom_upper = torch.pow(2.0, levels)
+    denom_lower = torch.pow(2.0, levels + 1.0)
+    upper_frequencies_tensor = float(sfreq) / denom_upper
+    lower_frequencies_tensor = float(sfreq) / denom_lower
+    center_frequencies_tensor = 0.5 * (lower_frequencies_tensor + upper_frequencies_tensor)
+    center_frequencies: List[float] = center_frequencies_tensor.tolist()
+    lower_frequencies: List[float] = lower_frequencies_tensor.tolist()
+    upper_frequencies: List[float] = upper_frequencies_tensor.tolist()
+
+    lowcut_frequency = float(lowcut_frequency)
+    if lowcut_frequency < 0.0:
+        raise ValueError("lowcut_frequency must be non-negative.")
+
+    mask = upper_frequencies_tensor <= lowcut_frequency
+    lowest_wavelet_bands_to_exclude = int(mask.sum().item())
+    num_bands_to_process = num_bands_total - lowest_wavelet_bands_to_exclude
+
+    data_sample_count = int(cleaned_broadband.size(1))
+    lowcut_in_use = lowcut_frequency
+    while num_bands_to_process > 0:
+        lowest_idx = num_bands_to_process - 1
+        required_samples = (epoch_size_in_cycles / lower_frequencies[lowest_idx]) * float(sfreq)
+        if required_samples <= data_sample_count:
+            break
+        warnings.warn(
+            (
+                "EEG data length is too short for the epoch size required by the lowest "
+                f"frequency band ({center_frequencies[lowest_idx]:.3g} Hz). Increasing lowcut_frequency."
+            ),
+            RuntimeWarning,
+        )
+        lowcut_in_use = upper_frequencies[lowest_idx]
+        mask = upper_frequencies_tensor <= lowcut_in_use
+        lowest_wavelet_bands_to_exclude = int(mask.sum().item())
+        num_bands_to_process = num_bands_total - lowest_wavelet_bands_to_exclude
+
+    lowcut_frequency = lowcut_in_use
+
+    if num_bands_to_process <= 0:
         cleaned = cleaned_broadband
         if skip_checks_and_return_cleaned_only:
             # trim back to original length if we padded
@@ -283,10 +327,34 @@ def gedai(
             artifact_threshold_broadband=float(thresh_broadband),
             epoch_size_used=float(epoch_size_used),
             refCOV=refCOV,
+            epoch_sizes_per_band=torch.empty(0, device=device, dtype=dtype),
+            lowcut_frequency_used=float(lowcut_frequency),
         )
 
+    # determine per-band epoch sizes based on cycle count
+    if num_bands_to_process > 0:
+        freq_subset = lower_frequencies_tensor[:num_bands_to_process].to(torch.float64)
+        sfreq_tensor = torch.as_tensor(float(sfreq), dtype=torch.float64, device=freq_subset.device)
+        epoch_cycles = torch.full_like(freq_subset, float(epoch_size_in_cycles), dtype=torch.float64)
+        ideal_samples = (epoch_cycles / freq_subset) * sfreq_tensor
+        # MATLAB half-away-from-zero rounding in vector form, keep integers exact.
+        rounded_samples = torch.sign(ideal_samples) * torch.floor(torch.abs(ideal_samples) + 0.5)
+        rounded_samples = torch.where(rounded_samples <= 0.0, torch.full_like(rounded_samples, 2.0), rounded_samples)
+        rounded_samples_long = rounded_samples.to(torch.int64)
+        odd_mask = (rounded_samples_long & 1) != 0
+        if bool(odd_mask.any()):
+            dist_lo = torch.abs(ideal_samples - (rounded_samples_long - 1).to(torch.float64))
+            dist_hi = torch.abs(ideal_samples - (rounded_samples_long + 1).to(torch.float64))
+            choose_minus = dist_lo < dist_hi
+            adjusted_odds = torch.where(choose_minus, rounded_samples_long - 1, rounded_samples_long + 1)
+            rounded_samples_long = torch.where(odd_mask, adjusted_odds, rounded_samples_long)
+        rounded_samples_long = torch.clamp(rounded_samples_long, min=2)
+        epoch_sizes_per_wavelet_band: List[float] = (rounded_samples_long.to(torch.float64) / sfreq_tensor).cpu().tolist()
+    else:
+        epoch_sizes_per_wavelet_band = []
+
     # denoise kept bands and sum them
-    bands_to_process = bands[:keep_upto]
+    bands_to_process = bands[:num_bands_to_process]
     filt = torch.zeros_like(bands_to_process)
 
     if not skip_checks_and_return_cleaned_only:
@@ -296,43 +364,43 @@ def gedai(
     if verbose_timing:
         profiling.mark("prepare_band_processing")
 
-    def _call_gedai_band(band_sig):
+    def _call_gedai_band(band_payload):
+        band_idx, band_sig = band_payload
+        current_epoch_size = epoch_sizes_per_wavelet_band[band_idx]
         if skip_checks_and_return_cleaned_only:
             cleaned_band, _, _, _ = gedai_per_band(
-                band_sig, sfreq, None, denoising_strength, epoch_size_used, 
+                band_sig, sfreq, None, denoising_strength, current_epoch_size, 
                 refCOV, "parabolic", False,
                 device=device, dtype=dtype, verbose_timing=bool(verbose_timing),
                 skip_checks_and_return_cleaned_only=skip_checks_and_return_cleaned_only,
                 TolX=TolX, maxiter=maxiter
             )
-            return cleaned_band, None, None
+            return band_idx, cleaned_band, None, None
         else:
             cleaned_band, _, s_band, thr_band = gedai_per_band(
-                band_sig, sfreq, None, denoising_strength, epoch_size_used, 
+                band_sig, sfreq, None, denoising_strength, current_epoch_size, 
                 refCOV, "parabolic", False,
                 device=device, dtype=dtype, verbose_timing=bool(verbose_timing),
                 skip_checks_and_return_cleaned_only=skip_checks_and_return_cleaned_only,
                 TolX=TolX, maxiter=maxiter
             )
-            return cleaned_band, s_band, thr_band
+            return band_idx, cleaned_band, s_band, thr_band
         
-    band_list = [bands_to_process[b] for b in range(bands_to_process.size(0))]
+    band_list = [(b, bands_to_process[b]) for b in range(bands_to_process.size(0))]
 
     if skip_checks_and_return_cleaned_only:
     # parallel map returning cleaned tensors
         if not batched:
             with ThreadPoolExecutor() as ex:
                 results = list(ex.map(_call_gedai_band, band_list))
-            for b, data in enumerate(results):
-                cleaned_band, _, _ = data
-
-                filt[b] = cleaned_band
+            for band_idx, cleaned_band, _, _ in results:
+                filt[band_idx] = cleaned_band
             if verbose_timing:
                 profiling.mark("bands_denoised_parallel")
         else:
-            for b, band in enumerate(band_list):
-                cleaned_band, _, _ = _call_gedai_band(band)
-                filt[b] = cleaned_band
+            for payload in band_list:
+                band_idx, cleaned_band, _, _ = _call_gedai_band(payload)
+                filt[band_idx] = cleaned_band
             if verbose_timing:
                 profiling.mark("bands_denoised_serial")
     else:
@@ -341,13 +409,13 @@ def gedai(
         
         with ThreadPoolExecutor() as ex:
             futures = [ex.submit(_call_gedai_band, band) for band in band_list]
-            for b, fut in enumerate(futures):
-                cleaned_band, s_band, thr_band = fut.result()
-                filt[b] = cleaned_band
-                sensai_scores.append(s_band)
-                thresholds.append(thr_band)
+            for fut in futures:
+                band_idx, cleaned_band, s_band, thr_band = fut.result()
+                filt[band_idx] = cleaned_band
+                sensai_scores.append(float(s_band))
+                thresholds.append(float(thr_band))
                 if verbose_timing:
-                    profiling.mark(f"band_done_{b}")
+                    profiling.mark(f"band_done_{band_idx}")
     cleaned = filt.sum(dim=0)
 
     if verbose_timing:
@@ -396,7 +464,20 @@ def gedai(
         artifact_threshold_broadband=float(thresh_broadband),
         epoch_size_used=float(epoch_size_used),
         refCOV=refCOV,
+        epoch_sizes_per_band=torch.as_tensor(epoch_sizes_per_wavelet_band, device=device, dtype=dtype),
+        lowcut_frequency_used=float(lowcut_frequency),
     )
+
+def _pad_reflect_tail(data: torch.Tensor, pad_right: int) -> torch.Tensor:
+    """Reflectively pad the right edge by pad_right samples."""
+    if pad_right <= 0 or data.size(1) == 0:
+        return data
+    width = int(data.size(1))
+    repeats = (int(pad_right) + width - 1) // width
+    flipped = torch.flip(data, dims=[1])
+    padding = flipped.repeat(1, repeats)
+    padding = padding[:, :pad_right]
+    return torch.cat([data, padding], dim=1)
 
 # MATLAB rounding and epoch-size parity 
 def _matlab_round_half_away_from_zero(x: float) -> int:

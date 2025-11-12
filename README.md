@@ -132,7 +132,6 @@ result = gedai(
   eeg,
   sfreq=raw.info["sfreq"],
   denoising_strength="auto",
-  epoch_size=1.0,
   leadfield=leadfield,
   device=device,
 )
@@ -150,7 +149,7 @@ Successful execution prints the cleaned array shape and a SENSAI quality score.
 
 ## `gedai()`
 
-`gedai(eeg, sfreq, denoising_strength="auto", epoch_size=1.0, leadfield=None, *, wavelet_levels=9, matlab_levels=None, chanlabels=None, device="cpu", dtype=torch.float32, skip_checks_and_return_cleaned_only=False, batched=False, verbose_timing=False, TolX=1e-1, maxiter=500)`
+`gedai(eeg, sfreq, denoising_strength="auto", leadfield=None, *, epoch_size_in_cycles=12.0, lowcut_frequency=0.5, wavelet_levels=9, matlab_levels=None, chanlabels=None, device="cpu", dtype=torch.float32, skip_checks_and_return_cleaned_only=False, batched=False, verbose_timing=False, TolX=1e-1, maxiter=500)`
 
 ### Purpose
 
@@ -170,7 +169,8 @@ Execute the GEDAI pipeline on a single EEG recording shaped `(channels, samples)
   - `"auto+"`: More conservative filtering (noise multiplier = 1.0).
   - Numeric value (`0.0–12.0` typical): Manual threshold passed directly to the optimizer.
   Internally this value is forwarded to `artifact_threshold_type` in `gedai_per_band()`.
-- `epoch_size`: Desired epoch duration in seconds. The helper enforces an even number of samples via `_ensure_even_epoch_size`, padding and trimming as necessary.
+- `epoch_size_in_cycles`: Number of wave cycles to cover when determining per-band epoch lengths (default `12.0`). Lower values shorten high-frequency epochs; higher values lengthen low-frequency epochs.
+- `lowcut_frequency`: Exclude wavelet bands whose upper frequency bound is at or below this threshold (Hz). Defaults to `0.5` to remove slow drifts.
 - `wavelet_levels`: Number of Haar MODWT levels when `matlab_levels` is `None`. Typical values fall between `7` and `9`.
 - `matlab_levels`: Alternative to `wavelet_levels`, recreating MATLAB level numbering with `2**matlab_levels + 1` bands. Leave `None` unless porting MATLAB scripts directly.
 - `chanlabels`: Placeholder for channel label remapping. Currently not implemented and raises an error when supplied.
@@ -181,6 +181,8 @@ Execute the GEDAI pipeline on a single EEG recording shaped `(channels, samples)
 - `verbose_timing`: Enables profiling markers emitted by `profiling.py`, useful for benchmarking.
 - `TolX`: Convergence tolerance for the golden-section search used during automatic thresholding (default `1e-1`).
 - `maxiter`: Maximum iterations allowed for the threshold optimizer (default `500`).
+
+The broadband stage follows MATLAB by using a 1 s epoch (rounded to an even number of samples) before the wavelet decomposition step.
 
 ### Returns
 
@@ -194,6 +196,8 @@ By default returns a dictionary with:
 - `artifact_threshold_broadband`: Threshold used during the initial broadband pass.
 - `epoch_size_used`: Actual epoch duration in seconds after enforcing an even sample count.
 - `refCOV`: Reference covariance matrix used for GEVD.
+- `epoch_sizes_per_band`: Per-band epoch durations (seconds) derived from `epoch_size_in_cycles`.
+- `lowcut_frequency_used`: Effective low-cut frequency after adjusting for data length constraints.
 
 When `skip_checks_and_return_cleaned_only=True`, the function returns only the `cleaned` tensor.
 
@@ -208,7 +212,7 @@ When `skip_checks_and_return_cleaned_only=True`, the function returns only the `
 
 ## `batch_gedai()`
 
-`batch_gedai(eeg_batch, sfreq, denoising_strength="auto", epoch_size=1.0, leadfield=None, *, wavelet_levels=9, matlab_levels=None, chanlabels=None, device="cpu", dtype=torch.float32, parallel=True, max_workers=None, verbose_timing=False, TolX=1e-1, maxiter=500)`
+`batch_gedai(eeg_batch, sfreq, denoising_strength="auto", leadfield=None, *, epoch_size_in_cycles=12.0, lowcut_frequency=0.5, wavelet_levels=9, matlab_levels=None, chanlabels=None, device="cpu", dtype=torch.float32, parallel=True, max_workers=None, verbose_timing=False, TolX=1e-1, maxiter=500)`
 
 ### Purpose
 
@@ -222,7 +226,7 @@ Vectorize the GEDAI pipeline across a batch dimension. Input tensors must be sha
 
 ### Key Optional Parameters
 
-- `denoising_strength`, `epoch_size`, `wavelet_levels`, `matlab_levels`, `chanlabels`, `device`, `dtype`, `TolX`, `maxiter`: Match the semantics of the corresponding arguments on `gedai()` and are forwarded per sample.
+- `denoising_strength`, `epoch_size_in_cycles`, `lowcut_frequency`, `wavelet_levels`, `matlab_levels`, `chanlabels`, `device`, `dtype`, `TolX`, `maxiter`: Match the semantics of the corresponding arguments on `gedai()` and are forwarded per sample.
 - `parallel`: When `True`, executes each batch element in a `ThreadPoolExecutor`. Set to `False` for serial execution or debugging.
 - `max_workers`: Overrides the number of worker threads when `parallel` is enabled. Defaults to Python's heuristic based on CPU count.
 - `verbose_timing`: Aggregates profiling information across the batch to assist throughput measurements.
@@ -276,7 +280,8 @@ This mirrors the workflow shown in `testing/Test.ipynb`, where the cleaned batch
       pass # torch was already initialised
   ```
   The `set_num_threads` calls must run before PyTorch initialises; future Python 3.14+ releases are expected to reduce the need for this workaround.
-- The pipeline enforces even epoch lengths. If the requested epoch and sampling rate yield an odd sample count, GEDAI pads before processing and trims afterward.
+- The pipeline enforces even epoch lengths. Incomplete epochs are padded via reflection rather than cropped, and the padding is trimmed after denoising.
+- Adjust `epoch_size_in_cycles` or `lowcut_frequency` when targeting specific bandwidths: higher cycle counts improve low-frequency stability while higher low-cut values skip slow drifts and reduce required epoch durations.
 - When running on GPU, move both EEG data and leadfield tensors to the target device prior to calling the API.
 - Enable `verbose_timing=True` during development to gather profiling markers such as `start_batch`, `modwt_analysis`, and `batch_done`.
 - If you only require cleaned signals, set `skip_checks_and_return_cleaned_only=True` to avoid collecting diagnostic metadata.
