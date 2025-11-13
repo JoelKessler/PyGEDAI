@@ -51,6 +51,27 @@ The notebook `testing/Test.ipynb` covers an end-to-end example, including plots 
 
 ---
 
+## Real Time Streaming
+
+`GEDAIStream` keeps a rolling buffer of incoming EEG chunks, periodically recomputes artifact thresholds, and applies them to each new chunk without reinitializing the optimizer. Use the `gedai_stream()` factory to create a configured stream when you need continuous denoising or want to embed GEDAI inside acquisition software.
+
+```python
+import torch
+from pygedai import gedai_stream
+
+leadfield = torch.load("leadfield_61ch.pt")
+stream = gedai_stream(sfreq=250.0, leadfield=leadfield, device="cpu")
+
+with stream:
+  for chunk in acquire_eeg_chunks():
+    cleaned_chunk = stream.next(chunk)
+    handle_cleaned_eeg(cleaned_chunk)
+```
+
+Call `stream.reset()` to clear thresholds while keeping the leadfield or `stream.close()` when shutting down the pipeline. The `state` property surfaces the current buffer and thresholds so you can checkpoint progress between sessions.
+
+---
+
 ## Deployment & Local Testing
 
 ### Build source and wheel distributions
@@ -250,27 +271,6 @@ cleaned = batch_gedai(batch, sfreq=125.0, leadfield=leadfield, verbose_timing=Tr
 ```
 
 This mirrors the workflow shown in `testing/Test.ipynb`, where the cleaned batch is plotted against the raw recording.
-
----
-
-## Real Time Streaming
-
-`GEDAIStream` keeps a rolling buffer of incoming EEG chunks, periodically recomputes artifact thresholds, and applies them to each new chunk without reinitializing the optimizer. Use the `gedai_stream()` factory to create a configured stream when you need continuous denoising or want to embed GEDAI inside acquisition software.
-
-```python
-import torch
-from pygedai import gedai_stream
-
-leadfield = torch.load("leadfield_61ch.pt")
-stream = gedai_stream(sfreq=250.0, leadfield=leadfield, device="cpu")
-
-with stream:
-  for chunk in acquire_eeg_chunks():
-    cleaned_chunk = stream.next(chunk)
-    handle_cleaned_eeg(cleaned_chunk)
-```
-
-Call `stream.reset()` to clear thresholds while keeping the leadfield or `stream.close()` when shutting down the pipeline. The `state` property surfaces the current buffer and thresholds so you can checkpoint progress between sessions.
 
 ---
 
