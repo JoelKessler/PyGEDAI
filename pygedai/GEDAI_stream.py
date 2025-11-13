@@ -15,6 +15,11 @@ import warnings
 import threading
 from concurrent.futures import CancelledError, ThreadPoolExecutor
 
+try:
+    import numpy as np  # type: ignore[import-not-found]
+except ImportError:  # pragma: no cover - optional dependency during import time
+    np = None  # type: ignore[assignment]
+
 from .GEDAI import gedai
 
 CallbackType = Callable[[torch.Tensor, int, torch.Tensor], None]
@@ -39,6 +44,7 @@ class GEDAIStream:
         TolX: float = 1e-1,
         maxiter: int = 500,
         max_concurrent_chunks: int = 1,
+        num_workers: Optional[int] = None,
     ) -> None:
         if leadfield is None:
             raise ValueError("leadfield is required to initialize GEDAIStream")
@@ -67,7 +73,26 @@ class GEDAIStream:
         )
         self.buffer_max_samples = max(int(round(self.buffer_max_sec * self.sfreq)), 1)
 
-        self.max_concurrent_chunks = max(int(max_concurrent_chunks), 1)
+        max_concurrent_chunks_int = int(max_concurrent_chunks)
+        if max_concurrent_chunks_int == -1:
+            self.max_concurrent_chunks = -1
+        elif max_concurrent_chunks_int >= 1:
+            self.max_concurrent_chunks = max_concurrent_chunks_int
+        else:
+            raise ValueError("max_concurrent_chunks must be -1 or a positive integer")
+
+        if num_workers is not None:
+            num_workers_int = int(num_workers)
+            if num_workers_int < 1:
+                raise ValueError("num_workers must be at least 1 when provided")
+            self._num_workers: Optional[int] = num_workers_int
+        else:
+            if self.max_concurrent_chunks == -1:
+                # Defer to ThreadPoolExecutor's default worker heuristic when no explicit cap is supplied.
+                self._num_workers = None
+            else:
+                self._num_workers = self.max_concurrent_chunks
+
         self._executor: Optional[ThreadPoolExecutor] = None
         self._semaphore: Optional[threading.Semaphore] = None
         self._order_lock = threading.Lock()
@@ -186,8 +211,10 @@ class GEDAIStream:
             try:
                 tensor = torch.load(leadfield).to(device=self.device, dtype=self.dtype)
             except Exception:
-                import numpy as np
-
+                if np is None:
+                    raise ImportError(
+                        "numpy is required to load leadfield tensors from disk"
+                    ) from None
                 loaded = np.load(leadfield)
                 tensor = torch.as_tensor(loaded, device=self.device, dtype=self.dtype)
 
@@ -219,8 +246,14 @@ class GEDAIStream:
 
     def _ensure_executor(self) -> None:
         if self._executor is None:
-            self._executor = ThreadPoolExecutor(max_workers=self.max_concurrent_chunks)
-            self._semaphore = threading.Semaphore(self.max_concurrent_chunks)
+            if self._num_workers is None:
+                self._executor = ThreadPoolExecutor()
+            else:
+                self._executor = ThreadPoolExecutor(max_workers=self._num_workers)
+            if self.max_concurrent_chunks == -1:
+                self._semaphore = None
+            else:
+                self._semaphore = threading.Semaphore(self.max_concurrent_chunks)
 
     def _enqueue_async_chunk(
         self,
@@ -229,7 +262,7 @@ class GEDAIStream:
         chunk_index: int,
     ) -> None:
         self._ensure_executor()
-        if self._executor is None or self._semaphore is None:
+        if self._executor is None:
             raise RuntimeError("Async executor is not available")
 
         thresholds_copy = (
@@ -244,7 +277,9 @@ class GEDAIStream:
 
         chunk_to_process = chunk.detach().clone().contiguous()
 
-        self._semaphore.acquire()
+        semaphore = self._semaphore
+        if semaphore is not None:
+            semaphore.acquire()
         try:
             future = self._executor.submit(
                 self._process_chunk_async,
@@ -253,7 +288,8 @@ class GEDAIStream:
                 lowcut_used,
             )
         except Exception:
-            self._semaphore.release()
+            if semaphore is not None:
+                semaphore.release()
             raise
 
         future.add_done_callback(
@@ -421,6 +457,7 @@ class GEDAIStream:
             "last_threshold_update_sample": self._last_threshold_update_sample,
             "initial_threshold_computed": self._initial_threshold_computed,
             "max_concurrent_chunks": self.max_concurrent_chunks,
+            "num_workers": self._num_workers,
             "pending_async_callbacks": len(self._pending_callbacks),
             "next_callback_index": self._next_callback_index,
         }
@@ -441,6 +478,7 @@ def gedai_stream(
     TolX: float = 1e-1,
     maxiter: int = 500,
     max_concurrent_chunks: int = 1,
+    num_workers: Optional[int] = None,
 ) -> GEDAIStream:
     """Factory returning a configured GEDAIStream instance."""
 
@@ -460,4 +498,5 @@ def gedai_stream(
         TolX=TolX,
         maxiter=maxiter,
         max_concurrent_chunks=max_concurrent_chunks,
+        num_workers=num_workers,
     )

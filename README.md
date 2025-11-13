@@ -64,7 +64,8 @@ The notebook `testing/Test.ipynb` covers an end-to-end example, including plots 
 - `epoch_size_in_cycles`, `lowcut_frequency`, `wavelet_levels`, `matlab_levels`: Wavelet configuration forwarded to `gedai()`, controlling frequency resolution and band selection.
 - `device`, `dtype`: Target torch device/dtype for buffering and computation.
 - `TolX`, `maxiter`: Convergence tolerance and iteration cap for SENSAI's golden-section search during threshold discovery.
-- `max_concurrent_chunks`: Upper bound on how many chunks are cleaned in parallel when supplying a callback (defaults to 1 for synchronous behaviour).
+- `max_concurrent_chunks`: Upper bound on how many chunks are allowed to be in-flight at once when using callbacks. Set to `-1` to disable back-pressure entirely and let submissions proceed without waiting.
+- `num_workers`: Thread pool size used for asynchronous cleaning; pass an explicit value to cap executor threads even when `max_concurrent_chunks=-1`. When omitted it mirrors `max_concurrent_chunks`, or falls back to Python's default when back-pressure is disabled.
 
 ```python
 import torch
@@ -79,7 +80,7 @@ with stream:
     handle_cleaned_eeg(cleaned_chunk)
 ```
 
-When you need non-blocking streaming, pass a `callback` to `stream.next` and increase `max_concurrent_chunks` to fan out work across a thread pool. The callback receives the cleaned chunk, its zero-based index, and the original data so you can queue results while the main loop keeps feeding new chunks.
+When you need non-blocking streaming, pass a `callback` to `stream.next`, control back-pressure with `max_concurrent_chunks`, and adjust `num_workers` to set the thread count. Setting `max_concurrent_chunks=-1` disables back-pressure entirely so the main loop never waits, while `num_workers` caps the executor's parallelism when provided.
 
 ```python
 cleaned_chunks: dict[int, torch.Tensor] = {}
@@ -93,7 +94,8 @@ stream = gedai_stream(
   leadfield=leadfield_cov,
   initial_threshold_delay_sec=10.0,
   threshold_update_interval_sec=10.0,
-  max_concurrent_chunks=2,
+  max_concurrent_chunks=-1,
+  num_workers=4,
 )
 
 with stream:
