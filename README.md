@@ -321,7 +321,7 @@ This mirrors the workflow shown in `testing/Test.ipynb`, where the cleaned batch
 
 ## License
 
-This port follows the PolyForm Noncommercial License 1.0.0, identical to the original GEDAI plugin. The core algorithms are patent pending; commercial use requires obtaining the appropriate license from the patent holders. See [LICENSE](https://github.com/Reshiru/PyGEDAI/blob/main/LICENSE) for full terms and contact information.
+This port follows the PolyForm Noncommercial License 1.0.0, identical to the original GEDAI plugin. The core algorithms are patent pending; commercial use requires obtaining the appropriate license from the patent holders. See [LICENSE](https://github.com/JoelKessler/PyGEDAI/blob/main/LICENSE) for full terms and contact information.
 
 ---
 
