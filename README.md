@@ -253,6 +253,27 @@ This mirrors the workflow shown in `testing/Test.ipynb`, where the cleaned batch
 
 ---
 
+## Real Time Streaming
+
+`GEDAIStream` keeps a rolling buffer of incoming EEG chunks, periodically recomputes artifact thresholds, and applies them to each new chunk without reinitializing the optimizer. Use the `gedai_stream()` factory to create a configured stream when you need continuous denoising or want to embed GEDAI inside acquisition software.
+
+```python
+import torch
+from pygedai import gedai_stream
+
+leadfield = torch.load("leadfield_61ch.pt")
+stream = gedai_stream(sfreq=250.0, leadfield=leadfield, device="cpu")
+
+with stream:
+  for chunk in acquire_eeg_chunks():
+    cleaned_chunk = stream.next(chunk)
+    handle_cleaned_eeg(cleaned_chunk)
+```
+
+Call `stream.reset()` to clear thresholds while keeping the leadfield or `stream.close()` when shutting down the pipeline. The `state` property surfaces the current buffer and thresholds so you can checkpoint progress between sessions.
+
+---
+
 ## Tips and Troubleshooting
 
 - Ensure the leadfield reference covariance shape matches the EEG channel count. The functions raise a `ValueError` when dimensions disagree.
@@ -287,19 +308,10 @@ This mirrors the workflow shown in `testing/Test.ipynb`, where the cleaned batch
 - If you only require cleaned signals, set `skip_checks_and_return_cleaned_only=True` to avoid collecting diagnostic metadata.
 - Automatic threshold selection relies on `sensai_fminbnd` (golden-section minimization) and may run up to `maxiter` iterations; supplying fixed thresholds dramatically reduces runtime.
 
----
-
-## Citation
-
-Ros, T., Férat, V., Huang, Y., Colangelo, C., Kia, S. M., Wolfers, T., Vulliemoz, S., & Michela, A. (2025). *Return of the GEDAI: Unsupervised EEG Denoising based on Leadfield Filtering*. bioRxiv. https://doi.org/10.1101/2025.10.04.680449
-
-When referencing this Python package, please also acknowledge that it ports the original MATLAB/EEGLAB plugin available at https://github.com/neurotuning/GEDAI-master.
-
----
 
 ## License
 
-This port follows the PolyForm Noncommercial License 1.0.0, identical to the original GEDAI plugin. The core algorithms are patent pending; commercial use requires obtaining the appropriate license from the patent holders. See [LICENSE](LICENSE) for full terms and contact information.
+This port follows the PolyForm Noncommercial License 1.0.0, identical to the original GEDAI plugin. The core algorithms are patent pending; commercial use requires obtaining the appropriate license from the patent holders. See [LICENSE](https://github.com/Reshiru/PyGEDAI/blob/main/LICENSE) for full terms and contact information.
 
 ---
 

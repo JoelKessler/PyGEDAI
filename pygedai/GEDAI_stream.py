@@ -1,56 +1,272 @@
 """
 Real-time streaming GEDAI for continuous EEG cleaning.
 
-This module provides a stateful streaming interface that:
-1. Accumulates incoming EEG chunks
-2. Periodically recomputes artifact thresholds
-3. Applies cleaning continuously with cached thresholds
+The stream object encapsulates stateful threshold management behind next so
+that multiple concurrent streams can operate independently.
 
 License: PolyForm Noncommercial License 1.0.0
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Optional, Tuple, Union
+from typing import Optional, Union
 
 import torch
 import warnings
 
 from .GEDAI import gedai
 
-@dataclass
-class GEDAIStreamState:
-    """State maintained across streaming calls."""
-    buffer: Optional[torch.Tensor] = None
-    samples_seen: int = 0
 
-    thresholds_per_band: Optional[torch.Tensor] = None
-    lowcut_frequency_used: Optional[float] = None
-    refCOV: Optional[torch.Tensor] = None
-    leadfield: Optional[torch.Tensor] = None
+class GEDAIStream:
+    """Stateful GEDAI stream exposing next to clean incoming EEG chunks."""
 
-    last_threshold_update_sample: int = 0
-    initial_threshold_computed: bool = False
+    def __init__(
+        self,
+        sfreq: float = 250.0,
+        leadfield: Union[str, torch.Tensor, None] = None,
+        threshold_update_interval_sec: float = 300.0,
+        initial_threshold_delay_sec: float = 60.0,
+        denoising_strength: str = "auto",
+        epoch_size_in_cycles: float = 12.0,
+        lowcut_frequency: float = 0.5,
+        wavelet_levels: Optional[int] = 9,
+        matlab_levels: Optional[int] = None,
+        device: Union[str, torch.device] = "cpu",
+        dtype: torch.dtype = torch.float32,
+        buffer_max_sec: float = 600.0,
+        TolX: float = 1e-1,
+        maxiter: int = 500,
+    ) -> None:
+        if leadfield is None:
+            raise ValueError("leadfield is required to initialize GEDAIStream")
 
-    sfreq: float = 250.0
-    n_channels: int = 0
-    threshold_update_interval_samples: int = 0
-    initial_threshold_delay_samples: int = 0
+        # Cache runtime options so threshold updates and cleaning share the same configuration.
+        self.sfreq = float(sfreq)
+        self.denoising_strength = denoising_strength
+        self.epoch_size_in_cycles = epoch_size_in_cycles
+        self.lowcut_frequency = lowcut_frequency
+        self.wavelet_levels = wavelet_levels
+        self.matlab_levels = matlab_levels
+        self.device = torch.device(device)
+        self.dtype = dtype
+        self.TolX = TolX
+        self.maxiter = maxiter
 
-    denoising_strength: str = "auto"
-    epoch_size_in_cycles: float = 12.0
-    lowcut_frequency: float = 0.5
-    wavelet_levels: Optional[int] = 9
-    matlab_levels: Optional[int] = None
-    device: Union[str, torch.device] = "cpu"
-    dtype: torch.dtype = torch.float32
-    TolX: float = 1e-1
-    maxiter: int = 500
+        self.threshold_update_interval_sec = float(threshold_update_interval_sec)
+        self.initial_threshold_delay_sec = float(initial_threshold_delay_sec)
+        self.buffer_max_sec = float(buffer_max_sec)
+
+        self.threshold_update_interval_samples = max(
+            int(round(self.threshold_update_interval_sec * self.sfreq)), 1
+        )
+        self.initial_threshold_delay_samples = max(
+            int(round(self.initial_threshold_delay_sec * self.sfreq)), 0
+        )
+        self.buffer_max_samples = max(int(round(self.buffer_max_sec * self.sfreq)), 1)
+
+        # Load the reference covariance once and reuse it across incoming chunks.
+        self._leadfield = self._load_leadfield(leadfield)
+        self._closed = False
+        self._reset_internal_state(reset_channels=True)
+
+    def next(self, eeg_chunk: torch.Tensor) -> torch.Tensor:
+        self._ensure_open()
+
+        if eeg_chunk.ndim != 2:
+            raise ValueError("eeg_chunk must be 2D (n_channels, n_samples)")
+
+        chunk = eeg_chunk.to(device=self.device, dtype=self.dtype)
+        n_channels, n_samples = chunk.shape
+        if n_samples == 0:
+            raise ValueError("eeg_chunk must contain at least one sample")
+
+        if self._n_channels is None:
+            if self._leadfield.shape != (n_channels, n_channels):
+                raise ValueError(
+                    f"leadfield shape must be ({n_channels}, {n_channels}); got {self._leadfield.shape}"
+                )
+            self._initialize_channels(n_channels)
+        elif self._n_channels != n_channels:
+            raise ValueError(
+                f"Chunk channel count ({n_channels}) does not match initialized stream ({self._n_channels})"
+            )
+
+        self._append_to_buffer(chunk)
+        self._samples_seen += n_samples
+
+        self._maybe_update_thresholds()
+        return self._clean_chunk(chunk)
+
+    def reset(self) -> None:
+        self._ensure_open()
+        self._reset_internal_state(reset_channels=True)
+
+    def close(self) -> None:
+        if self._closed:
+            return
+
+        self._reset_internal_state(reset_channels=True)
+        self._leadfield = None
+        self._closed = True
+
+    def __enter__(self) -> GEDAIStream:
+        self._ensure_open()
+        return self
+
+    def __exit__(self, exc_type, exc, exc_tb) -> None:
+        self.close()
+
+    def __del__(self) -> None:
+        try:
+            self.close()
+        except Exception:
+            pass
+
+    def _ensure_open(self) -> None:
+        if self._closed:
+            raise RuntimeError("Cannot use GEDAIStream after it has been closed")
+
+    def _reset_internal_state(self, reset_channels: bool) -> None:
+        self._buffer: Optional[torch.Tensor] = None
+        self._samples_seen: int = 0
+        self._thresholds_per_band: Optional[torch.Tensor] = None
+        self._lowcut_frequency_used: Optional[float] = None
+        if reset_channels:
+            self._n_channels: Optional[int] = None
+        self._last_threshold_update_sample: int = 0
+        self._initial_threshold_computed: bool = False
+
+    def _load_leadfield(self, leadfield: Union[str, torch.Tensor]) -> torch.Tensor:
+        if isinstance(leadfield, torch.Tensor):
+            tensor = leadfield.to(device=self.device, dtype=self.dtype)
+        else:
+            try:
+                tensor = torch.load(leadfield).to(device=self.device, dtype=self.dtype)
+            except Exception:
+                import numpy as np
+
+                loaded = np.load(leadfield)
+                tensor = torch.as_tensor(loaded, device=self.device, dtype=self.dtype)
+
+        if tensor.ndim != 2 or tensor.shape[0] != tensor.shape[1]:
+            raise ValueError("leadfield (refCov = L @ L.T) must be a square matrix")
+
+        return tensor.contiguous()
+
+    def _initialize_channels(self, n_channels: int) -> None:
+        self._n_channels = n_channels
+        self._buffer = None
+        self._samples_seen = 0
+        self._thresholds_per_band = None
+        self._lowcut_frequency_used = None
+        self._last_threshold_update_sample = 0
+        self._initial_threshold_computed = False
+
+    def _append_to_buffer(self, chunk: torch.Tensor) -> None:
+        # Maintain a rolling buffer capped by buffer_max_samples to drive threshold updates.
+        chunk_for_buffer = chunk.detach().clone()
+        if self._buffer is None:
+            self._buffer = chunk_for_buffer
+        else:
+            self._buffer = torch.cat([self._buffer, chunk_for_buffer], dim=1).contiguous()
+
+        if self._buffer.size(1) > self.buffer_max_samples:
+            excess = self._buffer.size(1) - self.buffer_max_samples
+            self._buffer = self._buffer[:, excess:]
+
+    def _maybe_update_thresholds(self) -> None:
+        if self._buffer is None:
+            return
+
+        should_update = False
+        if not self._initial_threshold_computed:
+            if self._samples_seen >= self.initial_threshold_delay_samples:
+                should_update = True
+        else:
+            samples_since_update = self._samples_seen - self._last_threshold_update_sample
+            if samples_since_update >= self.threshold_update_interval_samples:
+                should_update = True
+
+        if not should_update:
+            return
+
+        # Run GEDAI on the accumulated buffer to refresh thresholds while preserving the buffer contents.
+        was_computed = self._initial_threshold_computed
+        try:
+            result = gedai(
+                self._buffer,
+                sfreq=self.sfreq,
+                denoising_strength=self.denoising_strength,
+                leadfield=self._leadfield,
+                epoch_size_in_cycles=self.epoch_size_in_cycles,
+                lowcut_frequency=self.lowcut_frequency,
+                wavelet_levels=self.wavelet_levels,
+                matlab_levels=self.matlab_levels,
+                device=self.device,
+                dtype=self.dtype,
+                TolX=self.TolX,
+                maxiter=self.maxiter,
+                skip_checks_and_return_cleaned_only=False,
+            )
+        except Exception as exc:
+            warnings.warn(f"Threshold computation failed: {exc}. Using previous thresholds.")
+            return
+
+        self._thresholds_per_band = result["artifact_threshold_per_band"].detach().to(
+            device=self.device
+        ).clone()
+        self._lowcut_frequency_used = float(result["lowcut_frequency_used"])
+
+        self._initial_threshold_computed = True
+        self._last_threshold_update_sample = self._samples_seen
+
+        message = "Initial" if not was_computed else "Periodic"
+        print(f"GEDAI Stream: {message} thresholds computed at {self._samples_seen / self.sfreq:.1f}s")
+
+    def _clean_chunk(self, chunk: torch.Tensor) -> torch.Tensor:
+        if not self._initial_threshold_computed or self._thresholds_per_band is None:
+            return chunk
+
+        cleaning_lowcut = (
+            self._lowcut_frequency_used if self._lowcut_frequency_used is not None else self.lowcut_frequency
+        )
+
+        try:
+            # Reuse existing thresholds to avoid recomputing the optimizer for every chunk.
+            return gedai(
+                chunk,
+                sfreq=self.sfreq,
+                denoising_strength=self.denoising_strength,
+                leadfield=self._leadfield,
+                epoch_size_in_cycles=self.epoch_size_in_cycles,
+                lowcut_frequency=cleaning_lowcut,
+                wavelet_levels=self.wavelet_levels,
+                matlab_levels=self.matlab_levels,
+                device=self.device,
+                dtype=self.dtype,
+                TolX=self.TolX,
+                maxiter=self.maxiter,
+                skip_checks_and_return_cleaned_only=True,
+                artifact_thresholds_override=self._thresholds_per_band,
+            )
+        except Exception as exc:
+            warnings.warn(f"Cleaning failed: {exc}. Returning unprocessed chunk.")
+            return chunk
+
+    @property
+    def state(self) -> dict:
+        # Expose the mutable pieces so callers can snapshot or debug the stream state.
+        return {
+            "buffer": self._buffer,
+            "samples_seen": self._samples_seen,
+            "thresholds_per_band": self._thresholds_per_band,
+            "lowcut_frequency_used": self._lowcut_frequency_used,
+            "refCOV": self._leadfield,
+            "n_channels": self._n_channels,
+            "last_threshold_update_sample": self._last_threshold_update_sample,
+            "initial_threshold_computed": self._initial_threshold_computed,
+        }
 
 def gedai_stream(
-    eeg_chunk: torch.Tensor,
-    state: Optional[GEDAIStreamState] = None,
-    *,
     sfreq: float = 250.0,
     leadfield: Union[str, torch.Tensor, None] = None,
     threshold_update_interval_sec: float = 300.0,
@@ -65,221 +281,22 @@ def gedai_stream(
     buffer_max_sec: float = 600.0,
     TolX: float = 1e-1,
     maxiter: int = 500,
-) -> Tuple[torch.Tensor, GEDAIStreamState]:
-    """
-    Stream-based GEDAI cleaning for real-time EEG processing.
+) -> GEDAIStream:
+    """Factory returning a configured GEDAIStream instance."""
 
-    Parameters
-    - eeg_chunk: Incoming EEG chunk, shape (n_channels, n_samples).
-    - state: State from previous call. If None, initializes new stream.
-    - sfreq: Sampling frequency in Hz.
-    - leadfield: Leadfield covariance matrix or path to load it (required for first call).
-    - threshold_update_interval_sec: How often to recompute artifact thresholds (seconds). Default: 300.0 (5 min).
-    - initial_threshold_delay_sec: Wait this long before computing first threshold (seconds). Default: 60.0.
-    - denoising_strength: Denoising strength passed to GEDAI ("auto-", "auto", or "auto+").
-    - epoch_size_in_cycles: Number of wave cycles per epoch for each band.
-    - lowcut_frequency: Exclude bands with upper frequency <= this value (Hz).
-    - wavelet_levels: Number of wavelet decomposition levels (ignored when matlab_levels is provided).
-    - matlab_levels: MATLAB-style level selection (overrides wavelet_levels when provided).
-    - device: Computation device.
-    - dtype: Data type for computation.
-    - buffer_max_sec: Maximum buffer duration (seconds). Older data is discarded. Default: 600.0.
-    - TolX: Optimization tolerance forwarded to GEDAI.
-    - maxiter: Maximum iterations forwarded to GEDAI.
-
-    Returns
-    cleaned_chunk: Cleaned EEG for the current chunk (same shape as input).
-    state: Updated state to pass to next call.
-    """
-
-    if eeg_chunk.ndim != 2:
-        raise ValueError("eeg_chunk must be 2D (n_channels, n_samples)")
-
-    chunk = eeg_chunk.to(device=device, dtype=dtype)
-    n_channels, n_samples_chunk = chunk.shape
-    if n_samples_chunk == 0:
-        raise ValueError("eeg_chunk must contain at least one sample")
-
-    if state is None:
-        if leadfield is None:
-            raise ValueError("leadfield must be provided on first call")
-
-        threshold_update_samples = int(round(threshold_update_interval_sec * sfreq))
-        initial_delay_samples = int(round(initial_threshold_delay_sec * sfreq))
-        buffer_max_samples = int(round(buffer_max_sec * sfreq))
-        if buffer_max_samples <= 0:
-            raise ValueError("buffer_max_sec must correspond to at least one sample")
-
-        device_obj = torch.device(device)
-        if isinstance(leadfield, torch.Tensor):
-            leadfield_tensor = leadfield.to(device=device_obj, dtype=dtype)
-        else:
-            try:
-                leadfield_tensor = torch.load(leadfield).to(device=device_obj, dtype=dtype)
-            except Exception:
-                import numpy as np # Local import to avoid mandatory dependency at module load
-
-                loaded = np.load(leadfield)
-                leadfield_tensor = torch.as_tensor(loaded, device=device_obj, dtype=dtype)
-
-        if leadfield_tensor.shape != (n_channels, n_channels):
-            raise ValueError(f"leadfield shape must be ({n_channels}, {n_channels})")
-
-        state = GEDAIStreamState(
-            buffer=chunk.detach().clone(),
-            samples_seen=0,
-            leadfield=leadfield_tensor,
-            sfreq=sfreq,
-            n_channels=n_channels,
-            threshold_update_interval_samples=max(threshold_update_samples, 1),
-            initial_threshold_delay_samples=max(initial_delay_samples, 0),
-            denoising_strength=denoising_strength,
-            epoch_size_in_cycles=epoch_size_in_cycles,
-            lowcut_frequency=lowcut_frequency,
-            wavelet_levels=wavelet_levels,
-            matlab_levels=matlab_levels,
-            device=device_obj,
-            dtype=dtype,
-            TolX=TolX,
-            maxiter=maxiter,
-        )
-        state.refCOV = None
-        buffer_max_samples = int(round(buffer_max_sec * sfreq))
-    else:
-        if state.n_channels != n_channels:
-            raise ValueError(
-                f"Chunk channel count ({n_channels}) does not match initialized stream ({state.n_channels})"
-            )
-        buffer_max_samples = int(round(buffer_max_sec * state.sfreq))
-        if buffer_max_samples <= 0:
-            raise ValueError("buffer_max_sec must correspond to at least one sample")
-
-        chunk = chunk.to(device=state.device, dtype=state.dtype)
-        if leadfield is not None and state.leadfield is not None:
-            if isinstance(leadfield, torch.Tensor):
-                candidate = leadfield.to(device=state.device, dtype=state.dtype)
-            else:
-                try:
-                    candidate = torch.load(leadfield).to(device=state.device, dtype=state.dtype)
-                except Exception:
-                    import numpy as np
-
-                    loaded = np.load(leadfield)
-                    candidate = torch.as_tensor(loaded, device=state.device, dtype=state.dtype)
-            if candidate.shape != state.leadfield.shape or not torch.allclose(candidate, state.leadfield):
-                raise ValueError("leadfield provided does not match the one stored in the stream state")
-        elif leadfield is not None and state.leadfield is None:
-            if isinstance(leadfield, torch.Tensor):
-                state.leadfield = leadfield.to(device=state.device, dtype=state.dtype)
-            else:
-                try:
-                    state.leadfield = torch.load(leadfield).to(device=state.device, dtype=state.dtype)
-                except Exception:
-                    import numpy as np
-
-                    loaded = np.load(leadfield)
-                    state.leadfield = torch.as_tensor(loaded, device=state.device, dtype=state.dtype)
-        if state.leadfield is None:
-            raise ValueError("leadfield must be provided before streaming can continue")
-
-        chunk_for_buffer = chunk.detach().clone()
-        if state.buffer is None:
-            state.buffer = chunk_for_buffer
-        else:
-            state.buffer = torch.cat([state.buffer, chunk_for_buffer], dim=1).contiguous()
-
-    state.samples_seen += n_samples_chunk
-
-    # Trim buffer to maximum duration while keeping most recent data
-    if state.buffer is None:
-        state.buffer = chunk.detach().clone()
-    current_samples = state.buffer.size(1)
-    if current_samples > buffer_max_samples:
-        excess = current_samples - buffer_max_samples
-        state.buffer = state.buffer[:, excess:]
-
-    # Determine whether to recompute thresholds
-    should_update_threshold = False
-    if not state.initial_threshold_computed:
-        if state.samples_seen >= state.initial_threshold_delay_samples:
-            should_update_threshold = True
-    else:
-        samples_since_update = state.samples_seen - state.last_threshold_update_sample
-        if samples_since_update >= state.threshold_update_interval_samples:
-            should_update_threshold = True
-
-    if should_update_threshold:
-        was_computed = state.initial_threshold_computed
-        try:
-            result = gedai(
-                state.buffer,
-                sfreq=state.sfreq,
-                denoising_strength=state.denoising_strength,
-                leadfield=state.leadfield,
-                epoch_size_in_cycles=state.epoch_size_in_cycles,
-                lowcut_frequency=state.lowcut_frequency,
-                wavelet_levels=state.wavelet_levels,
-                matlab_levels=state.matlab_levels,
-                device=state.device,
-                dtype=state.dtype,
-                TolX=state.TolX,
-                maxiter=state.maxiter,
-                skip_checks_and_return_cleaned_only=False,
-            )
-
-            state.thresholds_per_band = result["artifact_threshold_per_band"].detach().to(device=state.device).clone()
-            state.lowcut_frequency_used = float(result["lowcut_frequency_used"])
-            state.refCOV = result.get("refCOV", None)
-            if state.refCOV is not None:
-                state.refCOV = state.refCOV.detach().clone()
-
-            state.initial_threshold_computed = True
-            state.last_threshold_update_sample = state.samples_seen
-
-            message = "Initial" if not was_computed else "Periodic"
-            print(
-                f"GEDAI Stream: {message} thresholds computed at {state.samples_seen / state.sfreq:.1f}s"
-            )
-        except Exception as exc:
-            warnings.warn(f"Threshold computation failed: {exc}. Using previous thresholds.")
-
-    if state.initial_threshold_computed and state.thresholds_per_band is not None:
-        try:
-            cleaning_lowcut = (
-                state.lowcut_frequency_used if state.lowcut_frequency_used is not None else state.lowcut_frequency
-            )
-            cleaned_chunk = gedai(
-                chunk,
-                sfreq=state.sfreq,
-                denoising_strength=state.denoising_strength,
-                leadfield=state.leadfield,
-                epoch_size_in_cycles=state.epoch_size_in_cycles,
-                lowcut_frequency=cleaning_lowcut,
-                wavelet_levels=state.wavelet_levels,
-                matlab_levels=state.matlab_levels,
-                device=state.device,
-                dtype=state.dtype,
-                TolX=state.TolX,
-                maxiter=state.maxiter,
-                skip_checks_and_return_cleaned_only=True,
-                artifact_thresholds_override=state.thresholds_per_band,
-            )
-        except Exception as exc:
-            warnings.warn(f"Cleaning failed: {exc}. Returning unprocessed chunk.")
-            cleaned_chunk = chunk
-    else:
-        cleaned_chunk = chunk
-
-    return cleaned_chunk, state
-
-def reset_stream(state: GEDAIStreamState) -> GEDAIStreamState:
-    """Reset streaming state while preserving configuration."""
-    state.buffer = None
-    state.samples_seen = 0
-    state.thresholds_per_band = None
-    state.lowcut_frequency_used = None
-    state.refCOV = None
-    state.last_threshold_update_sample = 0
-    state.initial_threshold_computed = False
-
-    return state
+    return GEDAIStream(
+        sfreq=sfreq,
+        leadfield=leadfield,
+        threshold_update_interval_sec=threshold_update_interval_sec,
+        initial_threshold_delay_sec=initial_threshold_delay_sec,
+        denoising_strength=denoising_strength,
+        epoch_size_in_cycles=epoch_size_in_cycles,
+        lowcut_frequency=lowcut_frequency,
+        wavelet_levels=wavelet_levels,
+        matlab_levels=matlab_levels,
+        device=device,
+        dtype=dtype,
+        buffer_max_sec=buffer_max_sec,
+        TolX=TolX,
+        maxiter=maxiter,
+    )
