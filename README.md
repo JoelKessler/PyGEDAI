@@ -55,12 +55,22 @@ The notebook `testing/Test.ipynb` covers an end-to-end example, including plots 
 
 `GEDAIStream` keeps a rolling buffer of incoming EEG chunks, periodically recomputes artifact thresholds, and applies them to each new chunk without reinitializing the optimizer. Use the `gedai_stream()` factory to create a configured stream when you need continuous denoising or want to embed GEDAI inside acquisition software.
 
+- `sfreq`: Sampling frequency in Hz.
+- `leadfield`: Square reference covariance (`channels × channels`) that anchors the GEVD.
+- `threshold_update_interval_sec`: How often (seconds of streamed data) to refresh artifact thresholds once the initial pass has completed.
+- `initial_threshold_delay_sec`: Minimum buffered duration before the first threshold computation, letting the optimizer see a representative window.
+- `buffer_max_sec`: Size cap (seconds) on the rolling buffer used for threshold estimation to keep memory usage bounded.
+- `denoising_strength`: Same semantics as `gedai()` (`"auto"`, `"auto-"`, `"auto+"`, or numeric); governs artifact rejection aggressiveness.
+- `epoch_size_in_cycles`, `lowcut_frequency`, `wavelet_levels`, `matlab_levels`: Wavelet configuration forwarded to `gedai()`, controlling frequency resolution and band selection.
+- `device`, `dtype`: Target torch device/dtype for buffering and computation.
+- `TolX`, `maxiter`: Convergence tolerance and iteration cap for SENSAI's golden-section search during threshold discovery.
+
 ```python
 import torch
 from pygedai import gedai_stream
 
 leadfield = torch.load("leadfield_61ch.pt")
-stream = gedai_stream(sfreq=250.0, leadfield=leadfield, device="cpu")
+stream = gedai_stream(sfreq=250.0, leadfield=leadfield, device="cpu", threshold_update_interval_sec=10.0, initial_threshold_delay_sec=5.0)
 
 with stream:
   for chunk in acquire_eeg_chunks():
