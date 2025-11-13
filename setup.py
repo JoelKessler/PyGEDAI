@@ -25,7 +25,7 @@ setup(
         "Documentation": "https://github.com/JoelKessler/PyGEDAI#readme",
     },
     install_requires=[
-        # pure-Python deps here, but NOT torch
+        "torch>=2.2.0",  # torch is mandatory for the core API
     ],
     extras_require={
         # do: pip install pygedai[torch]
