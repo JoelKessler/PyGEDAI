@@ -6,7 +6,7 @@ with open("README.md", "r", encoding="utf-8") as fh:
 setup(
     name="pygedai",
     description="PyGEDAI: Generalized Eigenvalue De-Artifacting Instrument in Python",
-    version="0.1.0",
+    version="0.1.1",
     author="Joel Kessler",
     license="PolyForm Noncommercial License 1.0.0",
     packages=find_packages(),
