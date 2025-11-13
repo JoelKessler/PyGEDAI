@@ -8,13 +8,16 @@ License: PolyForm Noncommercial License 1.0.0
 """
 from __future__ import annotations
 
-from typing import Optional, Union
+from typing import Callable, Dict, Optional, Tuple, Union
 
 import torch
 import warnings
+import threading
+from concurrent.futures import CancelledError, ThreadPoolExecutor
 
 from .GEDAI import gedai
 
+CallbackType = Callable[[torch.Tensor, int, torch.Tensor], None]
 
 class GEDAIStream:
     """Stateful GEDAI stream exposing next to clean incoming EEG chunks."""
@@ -35,6 +38,7 @@ class GEDAIStream:
         buffer_max_sec: float = 600.0,
         TolX: float = 1e-1,
         maxiter: int = 500,
+        max_concurrent_chunks: int = 1,
     ) -> None:
         if leadfield is None:
             raise ValueError("leadfield is required to initialize GEDAIStream")
@@ -63,12 +67,34 @@ class GEDAIStream:
         )
         self.buffer_max_samples = max(int(round(self.buffer_max_sec * self.sfreq)), 1)
 
+        self.max_concurrent_chunks = max(int(max_concurrent_chunks), 1)
+        self._executor: Optional[ThreadPoolExecutor] = None
+        self._semaphore: Optional[threading.Semaphore] = None
+        self._order_lock = threading.Lock()
+        self._pending_callbacks: Dict[
+            int, Tuple[Optional[torch.Tensor], Optional[torch.Tensor], Optional[CallbackType]]
+        ] = {}
+        self._next_callback_index = 0
+        self._chunk_sequence = 0
+
         # Load the reference covariance once and reuse it across incoming chunks.
         self._leadfield = self._load_leadfield(leadfield)
         self._closed = False
         self._reset_internal_state(reset_channels=True)
 
-    def next(self, eeg_chunk: torch.Tensor) -> torch.Tensor:
+    def next(
+        self,
+        eeg_chunk: torch.Tensor,
+        callback: Optional[CallbackType] = None,
+    ) -> Optional[torch.Tensor]:
+        """Clean the next EEG chunk, optionally dispatching results asynchronously.
+
+        When callback is provided the heavy GEDAI cleaning runs in a worker pool and the
+        callback is invoked with (cleaned_chunk, chunk_index, raw_chunk) in submission order.
+        In that mode the method returns None immediately once the chunk is queued. Without a
+        callback the method blocks and returns the cleaned chunk, preserving the pre-existing
+        synchronous behaviour.
+        """
         self._ensure_open()
 
         if eeg_chunk.ndim != 2:
@@ -94,16 +120,24 @@ class GEDAIStream:
         self._samples_seen += n_samples
 
         self._maybe_update_thresholds()
-        return self._clean_chunk(chunk)
+        if callback is None:
+            return self._clean_chunk(chunk)
+
+        chunk_index = self._chunk_sequence
+        self._chunk_sequence += 1
+        self._enqueue_async_chunk(chunk, callback, chunk_index)
+        return None
 
     def reset(self) -> None:
         self._ensure_open()
+        self._shutdown_executor(cancel_futures=True)
         self._reset_internal_state(reset_channels=True)
 
     def close(self) -> None:
         if self._closed:
             return
 
+        self._shutdown_executor(cancel_futures=True)
         self._reset_internal_state(reset_channels=True)
         self._leadfield = None
         self._closed = True
@@ -125,6 +159,13 @@ class GEDAIStream:
         if self._closed:
             raise RuntimeError("Cannot use GEDAIStream after it has been closed")
 
+    def _shutdown_executor(self, cancel_futures: bool) -> None:
+        executor = self._executor
+        if executor is not None:
+            executor.shutdown(wait=True, cancel_futures=cancel_futures)
+            self._executor = None
+        self._semaphore = None
+
     def _reset_internal_state(self, reset_channels: bool) -> None:
         self._buffer: Optional[torch.Tensor] = None
         self._samples_seen: int = 0
@@ -134,6 +175,9 @@ class GEDAIStream:
             self._n_channels: Optional[int] = None
         self._last_threshold_update_sample: int = 0
         self._initial_threshold_computed: bool = False
+        self._pending_callbacks.clear()
+        self._next_callback_index = 0
+        self._chunk_sequence = 0
 
     def _load_leadfield(self, leadfield: Union[str, torch.Tensor]) -> torch.Tensor:
         if isinstance(leadfield, torch.Tensor):
@@ -172,6 +216,103 @@ class GEDAIStream:
         if self._buffer.size(1) > self.buffer_max_samples:
             excess = self._buffer.size(1) - self.buffer_max_samples
             self._buffer = self._buffer[:, excess:]
+
+    def _ensure_executor(self) -> None:
+        if self._executor is None:
+            self._executor = ThreadPoolExecutor(max_workers=self.max_concurrent_chunks)
+            self._semaphore = threading.Semaphore(self.max_concurrent_chunks)
+
+    def _enqueue_async_chunk(
+        self,
+        chunk: torch.Tensor,
+        callback: Optional[CallbackType],
+        chunk_index: int,
+    ) -> None:
+        self._ensure_executor()
+        if self._executor is None or self._semaphore is None:
+            raise RuntimeError("Async executor is not available")
+
+        thresholds_copy = (
+            self._thresholds_per_band.detach().clone()
+            if self._thresholds_per_band is not None
+            else None
+        )
+        if thresholds_copy is not None:
+            thresholds_copy = thresholds_copy.to(device=self.device, dtype=self.dtype)
+
+        lowcut_used = self._lowcut_frequency_used
+
+        chunk_to_process = chunk.detach().clone().contiguous()
+
+        self._semaphore.acquire()
+        try:
+            future = self._executor.submit(
+                self._process_chunk_async,
+                chunk_to_process,
+                thresholds_copy,
+                lowcut_used,
+            )
+        except Exception:
+            self._semaphore.release()
+            raise
+
+        future.add_done_callback(
+            lambda fut, idx=chunk_index, cb=callback: self._handle_async_result(fut, idx, cb)
+        )
+
+    def _process_chunk_async(
+        self,
+        chunk: torch.Tensor,
+        thresholds_per_band: Optional[torch.Tensor],
+        lowcut_frequency_used: Optional[float],
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        cleaned = self._clean_chunk(
+            chunk,
+            thresholds_per_band=thresholds_per_band,
+            lowcut_frequency_used=lowcut_frequency_used,
+        )
+        return chunk, cleaned
+
+    def _handle_async_result(
+        self,
+        future,
+        chunk_index: int,
+        callback: Optional[CallbackType],
+    ) -> None:
+        try:
+            original, cleaned = future.result()
+        except CancelledError:
+            if self._semaphore is not None:
+                self._semaphore.release()
+            return
+        except Exception as exc:
+            warnings.warn(f"Cleaning failed: {exc}. Returning unprocessed chunk.")
+            original = cleaned = None
+
+        if cleaned is None and original is not None:
+            cleaned = original
+
+        ready_callbacks: list[Tuple[int, Optional[torch.Tensor], Optional[torch.Tensor], Optional[CallbackType]]] = []
+        with self._order_lock:
+            self._pending_callbacks[chunk_index] = (cleaned, original, callback)
+            while self._next_callback_index in self._pending_callbacks:
+                stored_cleaned, stored_original, stored_callback = self._pending_callbacks.pop(
+                    self._next_callback_index
+                )
+                ready_callbacks.append(
+                    (self._next_callback_index, stored_cleaned, stored_original, stored_callback)
+                )
+                self._next_callback_index += 1
+
+        if self._semaphore is not None:
+            self._semaphore.release()
+
+        for idx, cleaned_chunk, original_chunk, cb in ready_callbacks:
+            if cb is not None and cleaned_chunk is not None and original_chunk is not None:
+                try:
+                    cb(cleaned_chunk, idx, original_chunk)
+                except Exception as cb_exc:
+                    warnings.warn(f"Callback raised an exception: {cb_exc}")
 
     def _maybe_update_thresholds(self) -> None:
         if self._buffer is None:
@@ -222,15 +363,30 @@ class GEDAIStream:
         message = "Initial" if not was_computed else "Periodic"
         print(f"GEDAI Stream: {message} thresholds computed at {self._samples_seen / self.sfreq:.1f}s")
 
-    def _clean_chunk(self, chunk: torch.Tensor) -> torch.Tensor:
-        if not self._initial_threshold_computed or self._thresholds_per_band is None:
-            return chunk
+    def _clean_chunk(
+        self,
+        chunk: torch.Tensor,
+        thresholds_per_band: Optional[torch.Tensor] = None,
+        lowcut_frequency_used: Optional[float] = None,
+    ) -> torch.Tensor:
+        thresholds = thresholds_per_band
+        if thresholds is None:
+            if not self._initial_threshold_computed or self._thresholds_per_band is None:
+                return chunk
+            thresholds = self._thresholds_per_band
 
         cleaning_lowcut = (
-            self._lowcut_frequency_used if self._lowcut_frequency_used is not None else self.lowcut_frequency
+            lowcut_frequency_used
+            if lowcut_frequency_used is not None
+            else (
+                self._lowcut_frequency_used
+                if self._lowcut_frequency_used is not None
+                else self.lowcut_frequency
+            )
         )
 
         try:
+            thresholds_for_run = thresholds.to(device=self.device, dtype=self.dtype)
             # Reuse existing thresholds to avoid recomputing the optimizer for every chunk.
             return gedai(
                 chunk,
@@ -246,7 +402,7 @@ class GEDAIStream:
                 TolX=self.TolX,
                 maxiter=self.maxiter,
                 skip_checks_and_return_cleaned_only=True,
-                artifact_thresholds_override=self._thresholds_per_band,
+                artifact_thresholds_override=thresholds_for_run,
             )
         except Exception as exc:
             warnings.warn(f"Cleaning failed: {exc}. Returning unprocessed chunk.")
@@ -264,6 +420,9 @@ class GEDAIStream:
             "n_channels": self._n_channels,
             "last_threshold_update_sample": self._last_threshold_update_sample,
             "initial_threshold_computed": self._initial_threshold_computed,
+            "max_concurrent_chunks": self.max_concurrent_chunks,
+            "pending_async_callbacks": len(self._pending_callbacks),
+            "next_callback_index": self._next_callback_index,
         }
 
 def gedai_stream(
@@ -281,6 +440,7 @@ def gedai_stream(
     buffer_max_sec: float = 600.0,
     TolX: float = 1e-1,
     maxiter: int = 500,
+    max_concurrent_chunks: int = 1,
 ) -> GEDAIStream:
     """Factory returning a configured GEDAIStream instance."""
 
@@ -299,4 +459,5 @@ def gedai_stream(
         buffer_max_sec=buffer_max_sec,
         TolX=TolX,
         maxiter=maxiter,
+        max_concurrent_chunks=max_concurrent_chunks,
     )

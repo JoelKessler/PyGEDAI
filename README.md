@@ -64,6 +64,7 @@ The notebook `testing/Test.ipynb` covers an end-to-end example, including plots 
 - `epoch_size_in_cycles`, `lowcut_frequency`, `wavelet_levels`, `matlab_levels`: Wavelet configuration forwarded to `gedai()`, controlling frequency resolution and band selection.
 - `device`, `dtype`: Target torch device/dtype for buffering and computation.
 - `TolX`, `maxiter`: Convergence tolerance and iteration cap for SENSAI's golden-section search during threshold discovery.
+- `max_concurrent_chunks`: Upper bound on how many chunks are cleaned in parallel when supplying a callback (defaults to 1 for synchronous behaviour).
 
 ```python
 import torch
@@ -77,6 +78,33 @@ with stream:
     cleaned_chunk = stream.next(chunk)
     handle_cleaned_eeg(cleaned_chunk)
 ```
+
+When you need non-blocking streaming, pass a `callback` to `stream.next` and increase `max_concurrent_chunks` to fan out work across a thread pool. The callback receives the cleaned chunk, its zero-based index, and the original data so you can queue results while the main loop keeps feeding new chunks.
+
+```python
+cleaned_chunks: dict[int, torch.Tensor] = {}
+
+def handle_cleaned_chunk(cleaned_chunk: torch.Tensor, chunk_index: int, raw_chunk: torch.Tensor) -> None:
+  # Cache results while the main loop keeps submitting new chunks.
+  cleaned_chunks[chunk_index] = cleaned_chunk.detach().cpu()
+
+stream = gedai_stream(
+  sfreq=fs,
+  leadfield=leadfield_cov,
+  initial_threshold_delay_sec=10.0,
+  threshold_update_interval_sec=10.0,
+  max_concurrent_chunks=2,
+)
+
+with stream:
+  for idx, chunk in enumerate(eeg_chunks):
+    stream.next(chunk, callback=handle_cleaned_chunk)
+    # Perform logging, plotting, or acquisition work while GEDAI runs on a worker thread.
+
+# Cleaned tensors are available in cleaned_chunks once the callbacks have fired.
+```
+
+The notebook `testing/RealTimeEEG.ipynb` contains a full example that pairs this pattern with a `queue.Queue` to plot real-time updates while GEDAI runs concurrently.
 
 Call `stream.reset()` to clear thresholds while keeping the leadfield or `stream.close()` when shutting down the pipeline. The `state` property surfaces the current buffer and thresholds so you can checkpoint progress between sessions.
 
