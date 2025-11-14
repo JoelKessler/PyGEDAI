@@ -9,6 +9,7 @@ License: PolyForm Noncommercial License 1.0.0
 from __future__ import annotations
 
 from typing import Callable, Dict, Optional, Tuple, Union
+from collections import deque
 
 import torch
 import warnings
@@ -16,9 +17,9 @@ import threading
 from concurrent.futures import CancelledError, ThreadPoolExecutor
 
 try:
-    import numpy as np  # type: ignore[import-not-found]
-except ImportError:  # pragma: no cover - optional dependency during import time
-    np = None  # type: ignore[assignment]
+    import numpy as np # type: ignore[import-not-found]
+except ImportError: # pragma: no cover - optional dependency during import time
+    np = None # type: ignore[assignment]
 
 from .GEDAI import gedai
 
@@ -41,6 +42,7 @@ class GEDAIStream:
         device: Union[str, torch.device] = "cpu",
         dtype: torch.dtype = torch.float32,
         buffer_max_sec: float = 600.0,
+        processing_window_sec: Optional[float] = None,
         TolX: float = 1e-1,
         maxiter: int = 500,
         max_concurrent_chunks: int = 1,
@@ -72,6 +74,19 @@ class GEDAIStream:
             int(round(self.initial_threshold_delay_sec * self.sfreq)), 0
         )
         self.buffer_max_samples = max(int(round(self.buffer_max_sec * self.sfreq)), 1)
+
+        if processing_window_sec is None:
+            self.processing_window_sec: Optional[float] = None
+            self._processing_window_samples: Optional[int] = None
+        else:
+            window_sec = float(processing_window_sec)
+            if window_sec <= 0:
+                raise ValueError("processing_window_sec must be positive when provided")
+            window_samples = max(int(round(window_sec * self.sfreq)), 1)
+            self.processing_window_sec = window_sec
+            self._processing_window_samples = window_samples
+        self._window_accumulator: Optional[torch.Tensor] = None
+        self._window_ready_chunks = deque()
 
         max_concurrent_chunks_int = int(max_concurrent_chunks)
         if max_concurrent_chunks_int == -1:
@@ -149,12 +164,31 @@ class GEDAIStream:
         self._samples_seen += n_samples
 
         self._maybe_update_thresholds()
-        if callback is None:
-            return self._clean_chunk(chunk)
+        if self._processing_window_samples is None:
+            if callback is None:
+                return self._clean_chunk(chunk)
 
-        chunk_index = self._chunk_sequence
-        self._chunk_sequence += 1
-        self._enqueue_async_chunk(chunk, callback, chunk_index)
+            chunk_index = self._chunk_sequence
+            self._chunk_sequence += 1
+            self._enqueue_async_chunk(chunk, callback, chunk_index)
+            return None
+
+        self._add_chunk_to_processing_window(chunk)
+
+        if callback is None:
+            processing_chunk = self._pop_ready_window_chunk()
+            if processing_chunk is None:
+                return None
+            return self._clean_chunk(processing_chunk)
+
+        while True:
+            processing_chunk = self._pop_ready_window_chunk()
+            if processing_chunk is None:
+                break
+            chunk_index = self._chunk_sequence
+            self._chunk_sequence += 1
+            self._enqueue_async_chunk(processing_chunk, callback, chunk_index)
+
         return None
 
     def reset(self) -> None:
@@ -209,6 +243,9 @@ class GEDAIStream:
         self._last_threshold_update_sample: int = 0
         self._initial_threshold_computed: bool = False
         self._pending_callbacks.clear()
+        if self._processing_window_samples is not None:
+            self._window_accumulator = None
+            self._window_ready_chunks = deque()
         with self._async_condition:
             self._active_async_tasks = 0
             self._threshold_update_in_progress = False
@@ -255,6 +292,31 @@ class GEDAIStream:
         if self._buffer.size(1) > self.buffer_max_samples:
             excess = self._buffer.size(1) - self.buffer_max_samples
             self._buffer = self._buffer[:, excess:]
+
+    def _add_chunk_to_processing_window(self, chunk: torch.Tensor) -> None:
+        if self._processing_window_samples is None:
+            return
+
+        if self._window_accumulator is None:
+            self._window_accumulator = chunk.detach().clone()
+        else:
+            self._window_accumulator = torch.cat(
+                [self._window_accumulator, chunk.detach().clone()], dim=1
+            ).contiguous()
+
+        target = self._processing_window_samples
+        while self._window_accumulator is not None and self._window_accumulator.size(1) >= target:
+            ready_chunk = self._window_accumulator[:, :target].contiguous()
+            self._window_ready_chunks.append(ready_chunk)
+            if self._window_accumulator.size(1) == target:
+                self._window_accumulator = None
+                break
+            self._window_accumulator = self._window_accumulator[:, target:].contiguous()
+
+    def _pop_ready_window_chunk(self) -> Optional[torch.Tensor]:
+        if not self._window_ready_chunks:
+            return None
+        return self._window_ready_chunks.popleft()
 
     def _ensure_executor(self) -> None:
         if self._executor is None:
@@ -501,6 +563,8 @@ class GEDAIStream:
             "initial_threshold_computed": self._initial_threshold_computed,
             "max_concurrent_chunks": self.max_concurrent_chunks,
             "num_workers": self._num_workers,
+            "processing_window_sec": self.processing_window_sec,
+            "processing_window_samples": self._processing_window_samples,
             "pending_async_callbacks": len(self._pending_callbacks),
             "next_callback_index": self._next_callback_index,
         }
@@ -518,6 +582,7 @@ def gedai_stream(
     device: Union[str, torch.device] = "cpu",
     dtype: torch.dtype = torch.float32,
     buffer_max_sec: float = 600.0,
+    processing_window_sec: Optional[float] = None,
     TolX: float = 1e-1,
     maxiter: int = 500,
     max_concurrent_chunks: int = 1,
@@ -538,6 +603,7 @@ def gedai_stream(
         device=device,
         dtype=dtype,
         buffer_max_sec=buffer_max_sec,
+        processing_window_sec=processing_window_sec,
         TolX=TolX,
         maxiter=maxiter,
         max_concurrent_chunks=max_concurrent_chunks,
