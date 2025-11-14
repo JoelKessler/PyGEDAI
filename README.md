@@ -106,6 +106,8 @@ with stream:
 # Cleaned tensors are available in cleaned_chunks once the callbacks have fired.
 ```
 
+Threshold updates run on the main streaming thread. When it's time to refresh, the stream waits for all currently running cleaning jobs to finish, then recomputes the thresholds, and only after that lets new chunks be processed. Jobs that were already running use the old thresholds. All chunks after the update use the new ones.
+
 The notebook `testing/RealTimeEEG.ipynb` contains a full example that pairs this pattern with a `queue.Queue` to plot real-time updates while GEDAI runs concurrently.
 
 Call `stream.reset()` to clear thresholds while keeping the leadfield or `stream.close()` when shutting down the pipeline. The `state` property surfaces the current buffer and thresholds so you can checkpoint progress between sessions.

@@ -99,6 +99,10 @@ class GEDAIStream:
         self._pending_callbacks: Dict[
             int, Tuple[Optional[torch.Tensor], Optional[torch.Tensor], Optional[CallbackType]]
         ] = {}
+        self._async_lock = threading.Lock()
+        self._async_condition = threading.Condition(self._async_lock)
+        self._threshold_update_in_progress = False
+        self._active_async_tasks = 0
         self._next_callback_index = 0
         self._chunk_sequence = 0
 
@@ -190,6 +194,10 @@ class GEDAIStream:
             executor.shutdown(wait=True, cancel_futures=cancel_futures)
             self._executor = None
         self._semaphore = None
+        with self._async_condition:
+            self._active_async_tasks = 0
+            self._threshold_update_in_progress = False
+            self._async_condition.notify_all()
 
     def _reset_internal_state(self, reset_channels: bool) -> None:
         self._buffer: Optional[torch.Tensor] = None
@@ -201,6 +209,10 @@ class GEDAIStream:
         self._last_threshold_update_sample: int = 0
         self._initial_threshold_computed: bool = False
         self._pending_callbacks.clear()
+        with self._async_condition:
+            self._active_async_tasks = 0
+            self._threshold_update_in_progress = False
+            self._async_condition.notify_all()
         self._next_callback_index = 0
         self._chunk_sequence = 0
 
@@ -265,21 +277,26 @@ class GEDAIStream:
         if self._executor is None:
             raise RuntimeError("Async executor is not available")
 
-        thresholds_copy = (
-            self._thresholds_per_band.detach().clone()
-            if self._thresholds_per_band is not None
-            else None
-        )
-        if thresholds_copy is not None:
-            thresholds_copy = thresholds_copy.to(device=self.device, dtype=self.dtype)
-
-        lowcut_used = self._lowcut_frequency_used
-
         chunk_to_process = chunk.detach().clone().contiguous()
 
         semaphore = self._semaphore
         if semaphore is not None:
             semaphore.acquire()
+
+        with self._async_condition:
+            while self._threshold_update_in_progress:
+                self._async_condition.wait()
+            self._active_async_tasks += 1
+            thresholds_copy = (
+                self._thresholds_per_band.detach().clone()
+                if self._thresholds_per_band is not None
+                else None
+            )
+            lowcut_used = self._lowcut_frequency_used
+
+        if thresholds_copy is not None:
+            thresholds_copy = thresholds_copy.to(device=self.device, dtype=self.dtype)
+
         try:
             future = self._executor.submit(
                 self._process_chunk_async,
@@ -290,11 +307,19 @@ class GEDAIStream:
         except Exception:
             if semaphore is not None:
                 semaphore.release()
+            self._finish_async_task()
             raise
 
         future.add_done_callback(
             lambda fut, idx=chunk_index, cb=callback: self._handle_async_result(fut, idx, cb)
         )
+
+    def _finish_async_task(self) -> None:
+        with self._async_condition:
+            if self._active_async_tasks > 0:
+                self._active_async_tasks -= 1
+            if self._threshold_update_in_progress and self._active_async_tasks == 0:
+                self._async_condition.notify_all()
 
     def _process_chunk_async(
         self,
@@ -320,6 +345,7 @@ class GEDAIStream:
         except CancelledError:
             if self._semaphore is not None:
                 self._semaphore.release()
+            self._finish_async_task()
             return
         except Exception as exc:
             warnings.warn(f"Cleaning failed: {exc}. Returning unprocessed chunk.")
@@ -350,6 +376,8 @@ class GEDAIStream:
                 except Exception as cb_exc:
                     warnings.warn(f"Callback raised an exception: {cb_exc}")
 
+        self._finish_async_task()
+
     def _maybe_update_thresholds(self) -> None:
         if self._buffer is None:
             return
@@ -365,6 +393,14 @@ class GEDAIStream:
 
         if not should_update:
             return
+
+        # Block new async tasks and wait for in-flight cleanings to finish before recomputing thresholds.
+        with self._async_condition:
+            while self._threshold_update_in_progress:
+                self._async_condition.wait()
+            self._threshold_update_in_progress = True
+            while self._active_async_tasks > 0:
+                self._async_condition.wait()
 
         # Run GEDAI on the accumulated buffer to refresh thresholds while preserving the buffer contents.
         was_computed = self._initial_threshold_computed
@@ -386,6 +422,9 @@ class GEDAIStream:
             )
         except Exception as exc:
             warnings.warn(f"Threshold computation failed: {exc}. Using previous thresholds.")
+            with self._async_condition:
+                self._threshold_update_in_progress = False
+                self._async_condition.notify_all()
             return
 
         self._thresholds_per_band = result["artifact_threshold_per_band"].detach().to(
@@ -398,6 +437,10 @@ class GEDAIStream:
 
         message = "Initial" if not was_computed else "Periodic"
         print(f"GEDAI Stream: {message} thresholds computed at {self._samples_seen / self.sfreq:.1f}s")
+
+        with self._async_condition:
+            self._threshold_update_in_progress = False
+            self._async_condition.notify_all()
 
     def _clean_chunk(
         self,
