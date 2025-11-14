@@ -108,6 +108,7 @@ with stream:
 ```
 
 If you set `processing_window_sec`, the stream buffers consecutive chunks until that many seconds of data are collected. Each window is cleaned (and delivered via callback, if provided) as a single block so downstream consumers always see window-aligned segments.
+When `callback` is omitted, `next()` returns `None` until a full window has been accumulated and then yields the cleaned window-sized tensor.
 
 Threshold updates run on the main streaming thread. When it's time to refresh, the stream waits for all currently running cleaning jobs to finish, then recomputes the thresholds, and only after that lets new chunks be processed. Jobs that were already running use the old thresholds. All chunks after the update use the new ones.
 
