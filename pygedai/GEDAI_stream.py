@@ -119,10 +119,10 @@ class GEDAIStream:
             samples = max(int(round(window_sec * self.sfreq)), 1)
             if (
                 self._processing_window_samples is not None
-                and samples > self._processing_window_samples
+                and samples <= self._processing_window_samples
             ):
                 raise ValueError(
-                    "moving_window_chunk_sec must not exceed processing_window_sec"
+                    "moving_window_chunk_sec must be greater than processing_window_sec"
                 )
             self.moving_window_chunk_sec = window_sec
             self._moving_window_chunk_samples = samples

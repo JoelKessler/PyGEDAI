@@ -61,6 +61,7 @@ The notebook `testing/Test.ipynb` covers an end-to-end example, including plots 
 - `initial_threshold_delay_sec`: Minimum buffered duration before the first threshold computation, letting the optimizer see a representative window.
 - `buffer_max_sec`: Size cap (seconds) on the rolling buffer used for threshold estimation to keep memory usage bounded.
 - `processing_window_sec`: Optional batching window (seconds) for cleaning. When set, incoming chunks are concatenated until the window length is reached, then processed as a single batch; synchronous calls return `None` until enough data is accumulated.
+- `moving_window_chunk_sec`: Size of the raw-history tail (seconds) that is prepended to every chunk before cleaning. GEDAI uses this overlapping context to avoid boundary artifacts; when both options are set the moving-window duration must exceed `processing_window_sec` so enough historical context is available beyond the active chunk.
 - `denoising_strength`: Same semantics as `gedai()` (`"auto"`, `"auto-"`, `"auto+"`, or numeric); governs artifact rejection aggressiveness.
 - `epoch_size_in_cycles`, `lowcut_frequency`, `wavelet_levels`, `matlab_levels`: Wavelet configuration forwarded to `gedai()`, controlling frequency resolution and band selection.
 - `device`, `dtype`: Target torch device/dtype for buffering and computation.
@@ -109,6 +110,8 @@ with stream:
 
 If you set `processing_window_sec`, the stream buffers consecutive chunks until that many seconds of data are collected. Each window is cleaned (and delivered via callback, if provided) as a single block so downstream consumers always see window-aligned segments.
 When `callback` is omitted, `next()` returns `None` until a full window has been accumulated and then yields the cleaned window-sized tensor.
+
+Configure `moving_window_chunk_sec` when you want each chunk (or processing window) to include a short tail of the immediately preceding raw data. This overlapping context keeps GEDAI’s wavelet bands from seeing abrupt edges, reduces artifacts near chunk boundaries, and determines how much history is stored in the stream’s `state`. Leave it unset to run on non-overlapping chunks, or choose a value strictly greater than `processing_window_sec` to keep extra historical context beyond the active window.
 
 Threshold updates run on the main streaming thread. When it's time to refresh, the stream waits for all currently running cleaning jobs to finish, then recomputes the thresholds, and only after that lets new chunks be processed. Jobs that were already running use the old thresholds. All chunks after the update use the new ones.
 
