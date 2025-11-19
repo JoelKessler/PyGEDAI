@@ -1,10 +1,12 @@
 import torch
-from typing import List, Dict, Tuple
+from typing import List, Dict, Tuple, Optional
 
 # Cache COE shift indices per (n_samples, J) pair so repeated GEDAI calls
 # don't re-run impulse MODWT reconstructions. Values are stored on CPU and
 # moved to the requested device on demand.
 _COE_SHIFT_CACHE: Dict[Tuple[int, int], torch.Tensor] = {}
+# Cache the smooth-band COE shift (single integer) per (n_samples, J)
+_SMOOTH_COE_CACHE: Dict[Tuple[int, int], int] = {}
 
 # MODWT (Haar) using MATLAB analysis convention
 def modwt_haar(x: torch.Tensor, J: int) -> List[torch.Tensor]:
@@ -36,17 +38,28 @@ def modwt_haar(x: torch.Tensor, J: int) -> List[torch.Tensor]:
         coeffs.append(W)
     return coeffs + [V]
 
-def modwtmra_haar(coeffs: List[torch.Tensor]) -> torch.Tensor:
+def modwtmra_haar(
+    coeffs: List[torch.Tensor],
+    max_detail_bands: Optional[int] = None,
+    return_smooth: bool = True,
+) -> torch.Tensor:
     """
     Vectorized MRA construction with COE alignment.
     Returns (J+1, n_channels, n_samples) with zero-phase bands.
     Output matches the previous implementation exactly.
     """
     # Keep float32 as in your original for identical numerics
-    details = [d.to(dtype=torch.float32) for d in coeffs[:-1]]
+    details_all = [d.to(dtype=torch.float32) for d in coeffs[:-1]]
     scale = coeffs[-1].to(dtype=torch.float32)
 
+    if max_detail_bands is not None:
+        details = details_all[: max(0, min(max_detail_bands, len(details_all)))]
+    else:
+        details = details_all
+
     J = len(details)
+    if J == 0:
+        raise ValueError("At least one detail band is required for MODWT MRA.")
     C, T = details[0].shape
     device = details[0].device
     dtype = details[0].dtype
@@ -71,20 +84,27 @@ def modwtmra_haar(coeffs: List[torch.Tensor]) -> torch.Tensor:
 
     # Smooth band (same as your original, including COE via impulse)
     sel0 = torch.zeros_like(W_stack)
-    smooth = _imodwt_haar_multi(sel0, scale)[0] # any batch gives identical smooth
-    impulse = torch.zeros((1, T), device=device, dtype=dtype)
-    impulse[0, T // 2] = 1.0
-    coeffs_imp = modwt_haar(impulse, J)
-    smooth_impulse = _imodwt_haar_multi(
-        torch.zeros((J, 1, T), device=device, dtype=dtype),
-        coeffs_imp[-1]
-    )[0] # (1, T)
-    smooth_coe = int(torch.argmax(torch.abs(smooth_impulse[0])).item()) - (T // 2)
-    smooth_aligned = torch.roll(smooth, shifts=-smooth_coe, dims=-1) # (C, T)
+    smooth = None
+    if return_smooth:
+        sel0 = torch.zeros_like(W_stack)
+        smooth = _imodwt_haar_multi(sel0, scale)[0] # any batch gives identical smooth
+        cache_key = (int(T), int(len(details_all)))
+        smooth_coe = _SMOOTH_COE_CACHE.get(cache_key)
+        if smooth_coe is None:
+            impulse = torch.zeros((1, T), device=device, dtype=dtype)
+            impulse[0, T // 2] = 1.0
+            coeffs_imp = modwt_haar(impulse, len(details_all))
+            smooth_impulse = _imodwt_haar_multi(
+                torch.zeros((len(details_all), 1, T), device=device, dtype=dtype),
+                coeffs_imp[-1]
+            )[0]
+            smooth_coe = int(torch.argmax(torch.abs(smooth_impulse[0])).item()) - (T // 2)
+            _SMOOTH_COE_CACHE[cache_key] = smooth_coe
+        smooth_aligned = torch.roll(smooth, shifts=-smooth_coe, dims=-1) # (C, T)
 
-    # Stack to (J+1, C, T)
-    out = torch.cat([aligned_details, smooth_aligned.unsqueeze(0)], dim=0)
-    return out
+    if return_smooth:
+        return torch.cat([aligned_details, smooth_aligned.unsqueeze(0)], dim=0)
+    return aligned_details
 
 def _imodwt_haar_multi(W_stack: torch.Tensor, VJ: torch.Tensor) -> torch.Tensor:
     """
@@ -164,7 +184,7 @@ def _compute_coe_shifts_vec(n_samples: int, J: int, device, dtype=torch.float32)
         coe_shifts = peak_idx - center_idx # (J,)
         cached = coe_shifts.to(torch.long).detach()
         _COE_SHIFT_CACHE[cache_key] = cached
-    return cached.to(device=device)
+    return cached.to(device=device, dtype=torch.long)
 
 def _complex_dtype_for(dtype: torch.dtype) -> torch.dtype:
     """Return a complex dtype matching the provided real dtype.

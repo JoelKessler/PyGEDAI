@@ -276,12 +276,8 @@ def gedai(
     if verbose_timing:
         profiling.mark("modwt_analysis")
 
-    bands = modwtmra_haar(coeffs)
-    if verbose_timing:
-        profiling.mark("mra_constructed")
-    
-    # frequency bookkeeping for wavelet bands
-    num_bands_total = int(bands.size(0))
+    # frequency bookkeeping for wavelet bands (depends only on level count)
+    num_bands_total = int(len(coeffs))
     freq_dtype = torch.float64 if cleaned_broadband.dtype == torch.float64 else torch.float32
     levels = torch.arange(1, num_bands_total + 1, device=cleaned_broadband.device, dtype=freq_dtype)
     denom_upper = torch.pow(2.0, levels)
@@ -362,6 +358,14 @@ def gedai(
             lowcut_frequency_used=float(lowcut_frequency),
         )
 
+    bands = modwtmra_haar(
+        coeffs,
+        max_detail_bands=num_bands_to_process,
+        return_smooth=False,
+    )
+    if verbose_timing:
+        profiling.mark("mra_constructed")
+
     # determine per-band epoch sizes based on cycle count
     override_missing = False
 
@@ -387,7 +391,7 @@ def gedai(
         epoch_sizes_per_wavelet_band = []
 
     # denoise kept bands and sum them
-    bands_to_process = bands[:num_bands_to_process]
+    bands_to_process = bands
     filt = torch.zeros_like(bands_to_process)
 
     if not skip_checks_and_return_cleaned_only:
