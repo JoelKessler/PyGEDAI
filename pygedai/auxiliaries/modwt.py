@@ -1,5 +1,10 @@
 import torch
-from typing import List
+from typing import List, Dict, Tuple
+
+# Cache COE shift indices per (n_samples, J) pair so repeated GEDAI calls
+# don't re-run impulse MODWT reconstructions. Values are stored on CPU and
+# moved to the requested device on demand.
+_COE_SHIFT_CACHE: Dict[Tuple[int, int], torch.Tensor] = {}
 
 # MODWT (Haar) using MATLAB analysis convention
 def modwt_haar(x: torch.Tensor, J: int) -> List[torch.Tensor]:
@@ -105,11 +110,15 @@ def _imodwt_haar_multi(W_stack: torch.Tensor, VJ: torch.Tensor) -> torch.Tensor:
     angles = -2.0 * torch.pi * k / float(T)
     twiddle = torch.exp(1j * angles).to(dtype=cdtype) # (T,)
 
-    # Prepare state replicated for all J target bands
-    V = VJ.unsqueeze(0).expand(J, C, T).contiguous() # (J, C, T)
+    # Prepare initial state in frequency domain for all J target bands
+    V0 = VJ.unsqueeze(0).expand(J, C, T).contiguous().to(fdtype)
+    FV = torch.fft.fft(V0.to(cdtype), dim=-1) # (J, C, T)
 
     # Pre-FFT of all W_j once (we'll select per level)
     FW_all = torch.fft.fft(W_stack.to(cdtype), dim=-1) # (J, C, T)
+
+    # Identity used to build one-hot selectors without reallocating each loop
+    eye = torch.eye(J, device=device, dtype=cdtype)
 
     # Walk levels from J..1, inserting the matching W only for its band
     for level in range(J, 0, -1):
@@ -122,41 +131,40 @@ def _imodwt_haar_multi(W_stack: torch.Tensor, VJ: torch.Tensor) -> torch.Tensor:
         Gj = (1 + z) * inv_sqrt2
         inv_denom = 1.0 / (torch.abs(Gj) ** 2 + torch.abs(Hj) ** 2) # (T,)
 
-        # FFT(V) for all bands in parallel
-        FV = torch.fft.fft(V.to(cdtype), dim=-1) # (J, C, T)
-
         # Select FW for this level: only the batch whose target band == level uses W[level-1]
         # Build a mask that is 1 for batch==level-1 else 0, shape (J, 1, 1) to broadcast
-        mask = torch.zeros((J, 1, 1), device=device, dtype=cdtype)
-        mask[level - 1, 0, 0] = 1.0
+        mask = eye[:, level - 1].view(J, 1, 1)
         FW_sel = FW_all[level - 1].unsqueeze(0) * mask # (J, C, T)
 
         # Vectorized update for all J reconstructions
-        X_prev = (torch.conj(Gj) * FV + torch.conj(Hj) * FW_sel) * inv_denom  # (J, C, T)
-        V = torch.fft.ifft(X_prev, dim=-1).real.to(fdtype) # (J, C, T)
+        FV = (torch.conj(Gj) * FV + torch.conj(Hj) * FW_sel) * inv_denom  # (J, C, T)
 
     # After descending to level 1, V holds each per-band reconstruction
-    return V # (J, C, T)
+    return torch.fft.ifft(FV, dim=-1).real.to(fdtype) # (J, C, T)
 
 def _compute_coe_shifts_vec(n_samples: int, J: int, device, dtype=torch.float32) -> torch.Tensor:
     """
     Vectorized COE shifts for all detail levels.
     Identical output to the scalar loop but ~Jx fewer Python trips.
     """
-    impulse = torch.zeros((1, n_samples), device=device, dtype=dtype)
-    center_idx = n_samples // 2
-    impulse[0, center_idx] = 1.0
+    cache_key = (int(n_samples), int(J))
+    cached = _COE_SHIFT_CACHE.get(cache_key)
+    if cached is None:
+        cpu = torch.device("cpu")
+        impulse = torch.zeros((1, n_samples), device=cpu, dtype=torch.float32)
+        center_idx = n_samples // 2
+        impulse[0, center_idx] = 1.0
 
-    coeffs = modwt_haar(impulse, J)
-    W = torch.stack([c for c in coeffs[:-1]], dim=0) # (J, 1, T)
-    VJ = coeffs[-1] # (1, T)
+        coeffs = modwt_haar(impulse, J)
+        W = torch.stack([c for c in coeffs[:-1]], dim=0) # (J, 1, T)
+        VJ = coeffs[-1] # (1, T)
 
-    # Reconstruct all impulse responses per detail band in parallel
-    bands_imp = _imodwt_haar_multi(W, VJ*0) # (J, 1, T)
-    # Peak index per band
-    peak_idx = torch.argmax(torch.abs(bands_imp[:, 0, :]), dim=-1) # (J,)
-    coe_shifts = peak_idx - center_idx # (J,)
-    return coe_shifts.to(torch.long)
+        bands_imp = _imodwt_haar_multi(W, VJ * 0) # (J, 1, T)
+        peak_idx = torch.argmax(torch.abs(bands_imp[:, 0, :]), dim=-1) # (J,)
+        coe_shifts = peak_idx - center_idx # (J,)
+        cached = coe_shifts.to(torch.long).detach()
+        _COE_SHIFT_CACHE[cache_key] = cached
+    return cached.to(device=device)
 
 def _complex_dtype_for(dtype: torch.dtype) -> torch.dtype:
     """Return a complex dtype matching the provided real dtype.
