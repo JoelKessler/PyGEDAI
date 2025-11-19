@@ -1,7 +1,10 @@
 # License: PolyForm Noncommercial License 1.0.0 — see LICENSE for full terms.
 
 import torch
-from typing import Union
+from typing import Union, Tuple, Dict
+
+
+_COSINE_TEMPLATE_CACHE: Dict[Tuple[int, bool, torch.dtype], torch.Tensor] = {}
 
 def create_cosine_weights(
     channels: Union[int, float],
@@ -55,18 +58,27 @@ def create_cosine_weights(
         raise ValueError("channels must be a non-negative integer.")
     C = int(ch_round_t.item())
 
-    out = torch.zeros((C, N), device=device, dtype=dtype)
     if N == 0 or C == 0:
-        return out
+        return torch.zeros((C, N), device=device, dtype=dtype)
 
+    template = _get_cosine_template(N, fullshift, dtype)
+    template = template.to(device=device, dtype=dtype)
+    return template.unsqueeze(0).expand(C, -1).clone()
+
+
+def _get_cosine_template(N: int, fullshift: bool, dtype: torch.dtype) -> torch.Tensor:
+    key = (N, fullshift, dtype)
+    cached = _COSINE_TEMPLATE_CACHE.get(key)
+    if cached is not None:
+        return cached
+    device = torch.device("cpu")
     if fullshift:
         u = torch.arange(1, N + 1, device=device, dtype=dtype)
         w = 0.5 - 0.5 * torch.cos(2 * torch.pi * u / float(N))
-        out[:, :] = w
     else:
+        w = torch.zeros(N, device=device, dtype=dtype)
         if N > 1:
             u = torch.arange(1, N, device=device, dtype=dtype)
-            w = 0.5 - 0.5 * torch.cos(2 * torch.pi * u / float(N - 1))
-            out[:, :N - 1] = w
-
-    return out
+            w[:-1] = 0.5 - 0.5 * torch.cos(2 * torch.pi * u / float(N - 1))
+    _COSINE_TEMPLATE_CACHE[key] = w
+    return w
