@@ -10,6 +10,23 @@ from .SENSAI_fminbnd import sensai_fminbnd
 from .SENSAI import sensai
 from .create_cosine_weights import create_cosine_weights
 
+def regularize_refCOV(refCOV: torch.Tensor, device: Union[str, torch.device], dtype: torch.dtype):
+    n_ch = refCOV.size(0) # X.shape[0] = channel size while refCov is (n_ch, n_ch)
+
+    # Reference covariance regularization
+    regularization_lambda = 0.05
+    eps_stability = 1e-12
+    evals = torch.linalg.eigvalsh(refCOV)
+    mean_eval = float(evals.mean().item())
+    mean_eval = max(mean_eval, eps_stability)
+    refCOV_reg = (
+        (1.0 - regularization_lambda) * refCOV
+        + regularization_lambda * mean_eval * torch.eye(n_ch, device=device, dtype=dtype)
+    )
+    refCOV_reg = (0.5 * (refCOV_reg + refCOV_reg.T)).to(device=device, dtype=dtype)
+
+    return refCOV_reg, mean_eval
+
 def gedai_per_band(
     eeg_data: torch.Tensor,
     srate: float,
@@ -17,6 +34,8 @@ def gedai_per_band(
     artifact_threshold_type,
     epoch_size: float,
     refCOV: torch.Tensor,
+    refCOV_reg: torch.Tensor,
+    mean_eval: float,
     optimization_type: str,
     parallel: bool,
     TolX: float = 1e-1,
@@ -106,17 +125,8 @@ def gedai_per_band(
         COV_2 = torch.zeros((n_ch, n_ch, 0), device=device, dtype=dtype)
     if verbose_timing:
         profiling.mark("cov2_computed")
-    # Reference covariance regularization
-    regularization_lambda = 0.05
+
     eps_stability = 1e-12
-    evals = torch.linalg.eigvalsh(refCOV)
-    mean_eval = float(evals.mean().item())
-    mean_eval = max(mean_eval, eps_stability)
-    refCOV_reg = (
-        (1.0 - regularization_lambda) * refCOV
-        + regularization_lambda * mean_eval * torch.eye(n_ch, device=device, dtype=dtype)
-    )
-    refCOV_reg = 0.5 * (refCOV_reg + refCOV_reg.T)
     
     # HARDENING: dead-epoch ridge
     if N_epochs > 0:

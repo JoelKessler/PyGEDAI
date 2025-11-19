@@ -36,7 +36,7 @@ import math
 import warnings
 
 from . import profiling
-from .auxiliaries.GEDAI_per_band import gedai_per_band
+from .auxiliaries.GEDAI_per_band import gedai_per_band, regularize_refCOV
 from .auxiliaries.SENSAI_basic import sensai_basic
 from .auxiliaries.GEDAI_nonRankDeficientAveRef import gedai_non_rank_deficient_avg_ref
 from .auxiliaries.modwt import modwt_haar, modwtmra_haar
@@ -147,7 +147,7 @@ def gedai(
     - device / dtype: torch device and dtype for computation.
     - skip_checks_and_return_cleaned_only: if True, skips input validation
       and returns only the cleaned EEG tensor.
-        - artifact_thresholds_override: optional sequence/tensor of thresholds
+    - artifact_thresholds_override: optional sequence/tensor of thresholds
             (broadband first, followed by per-band) to reuse without re-optimizing.
 
     The function returns a dictionary containing cleaned data,
@@ -210,6 +210,7 @@ def gedai(
             f"leadfield covariance must be ({n_ch}, {n_ch}), got {leadfield_t.shape}."
         )
     refCOV = leadfield_t
+    refCOV_reg, mean_eval = regularize_refCOV(refCOV, dtype=dtype, device=device)
 
     if verbose_timing:
         profiling.mark("leadfield_loaded")
@@ -252,7 +253,8 @@ def gedai(
         broadband_threshold_arg = broadband_threshold_override
 
     cleaned_broadband, _, sensai_broadband, thresh_broadband = gedai_per_band(
-        eeg_ref_proc, sfreq, None, broadband_threshold_arg, epoch_size_used, refCOV.to(device=device), "parabolic", False,
+        eeg_ref_proc, sfreq, None, broadband_threshold_arg, epoch_size_used, refCOV=refCOV, refCOV_reg=refCOV_reg, 
+        mean_eval=mean_eval, optimization_type="parabolic", parallel=False,
         device=device, dtype=dtype, verbose_timing=bool(verbose_timing), TolX=TolX, maxiter=maxiter,
         skip_checks_and_return_cleaned_only=skip_checks_and_return_cleaned_only
     )
@@ -406,8 +408,8 @@ def gedai(
             cleaned_band, _, _, _ = gedai_per_band(
                 band_sig, sfreq, None,
                 denoising_strength if threshold_override is None else threshold_override,
-                current_epoch_size, 
-                refCOV, "parabolic", False,
+                current_epoch_size, refCOV=refCOV, refCOV_reg=refCOV_reg, 
+                mean_eval=mean_eval, optimization_type="parabolic", parallel=False,
                 device=device, dtype=dtype, verbose_timing=bool(verbose_timing),
                 skip_checks_and_return_cleaned_only=skip_checks_and_return_cleaned_only,
                 TolX=TolX, maxiter=maxiter
@@ -417,8 +419,8 @@ def gedai(
             cleaned_band, _, s_band, thr_band = gedai_per_band(
                 band_sig, sfreq, None,
                 denoising_strength if threshold_override is None else threshold_override,
-                current_epoch_size, 
-                refCOV, "parabolic", False,
+                current_epoch_size, refCOV=refCOV, refCOV_reg=refCOV_reg, 
+                mean_eval=mean_eval, optimization_type="parabolic", parallel=False,
                 device=device, dtype=dtype, verbose_timing=bool(verbose_timing),
                 skip_checks_and_return_cleaned_only=skip_checks_and_return_cleaned_only,
                 TolX=TolX, maxiter=maxiter
