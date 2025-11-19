@@ -48,6 +48,7 @@ class GEDAIStream:
         maxiter: int = 500,
         max_concurrent_chunks: int = 1,
         num_workers: Optional[int] = None,
+        verbose_timing: bool = False,
     ) -> None:
         """Initialise the streaming GEDAI cleaner.
 
@@ -160,6 +161,7 @@ class GEDAIStream:
         self._active_async_tasks = 0
         self._next_callback_index = 0
         self._chunk_sequence = 0
+        self.verbose_timing = bool(verbose_timing)
 
         # Load the reference covariance once and reuse it across incoming chunks.
         self._leadfield = self._load_leadfield(leadfield)
@@ -736,6 +738,7 @@ class GEDAIStream:
                 TolX=self.TolX,
                 maxiter=self.maxiter,
                 skip_checks_and_return_cleaned_only=False,
+                verbose_timing=self.verbose_timing,
             )
         except Exception as exc:
             warnings.warn(f"Threshold computation failed: {exc}. Using previous thresholds.")
@@ -807,6 +810,7 @@ class GEDAIStream:
                 maxiter=self.maxiter,
                 skip_checks_and_return_cleaned_only=True,
                 artifact_thresholds_override=thresholds_for_run,
+                verbose_timing=self.verbose_timing,
             )
             if history is not None and history.numel() > 0:
                 return cleaned_window[:, -chunk_samples:].contiguous()
@@ -837,6 +841,7 @@ class GEDAIStream:
             "cleaning_history_samples": self._cleaning_history_count,
             "pending_async_callbacks": len(self._pending_callbacks),
             "next_callback_index": self._next_callback_index,
+            "verbose_timing": self.verbose_timing,
         }
 
 def gedai_stream(
@@ -858,6 +863,7 @@ def gedai_stream(
     maxiter: int = 500,
     max_concurrent_chunks: int = 1,
     num_workers: Optional[int] = None,
+    verbose_timing: bool = False,
 ) -> GEDAIStream:
     """Factory returning a configured GEDAIStream instance."""
 
@@ -880,4 +886,5 @@ def gedai_stream(
         maxiter=maxiter,
         max_concurrent_chunks=max_concurrent_chunks,
         num_workers=num_workers,
+        verbose_timing=verbose_timing,
     )

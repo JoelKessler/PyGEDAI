@@ -184,6 +184,10 @@ def gedai(
         raise ValueError("epoch_size_in_cycles must be positive.")
 
     if verbose_timing:
+        # Prepare profiler for this run so marks inside helper modules
+        # (e.g. gedai_per_band) are captured and reported.
+        profiling.reset()
+        profiling.enable(True)
         profiling.mark("start_gedai")
 
     n_ch = int(eeg.size(0))

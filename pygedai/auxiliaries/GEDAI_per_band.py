@@ -220,6 +220,8 @@ def gedai_per_band(
             artifact_threshold = float(artifact_threshold_type)
         except Exception as e:
             raise ValueError("artifact_threshold_type must be 'auto*' or numeric.") from e
+    if verbose_timing:
+        profiling.mark("artifact_threshold_determined")
     # Clean EEG data
     cleaned_data_1, artifacts_data_1, artifact_threshold_out = clean_eeg(
         EEGdata_epoched, srate, epoch_size, artifact_threshold, refCOV, Eval, Evec,
@@ -238,6 +240,8 @@ def gedai_per_band(
     if verbose_timing:
         profiling.mark("clean_eeg_2_done")
     cosine_weights = create_cosine_weights(n_ch, srate, epoch_size, True, device=device, dtype=dtype)
+    if verbose_timing:
+        profiling.mark("cosine_weights_ready")
     size_reconstructed_2 = cleaned_data_2.size(1)
     sample_end = size_reconstructed_2 - shifting
     if size_reconstructed_2 > 0 and shifting > 0:
