@@ -147,7 +147,7 @@ conda activate pygedai
 pip install mne
 pip install "torch==2.2.2"
 pip install "numpy==1.26.4"
-pip install dist/pygedai-0.1.1-py3-none-any.whl --force-reinstall
+pip install dist/pygedai-1.0.0-py3-none-any.whl --force-reinstall
 ```
 
 Adjust the Python version and dependency pins as needed for your platform (the above works well on Intel macOS).
