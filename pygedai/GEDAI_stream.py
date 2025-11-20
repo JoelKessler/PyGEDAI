@@ -22,6 +22,7 @@ except ImportError: # pragma: no cover - optional dependency during import time
     np = None # type: ignore[assignment]
 
 from .GEDAI import gedai
+from .auxiliaries.GEDAI_per_band import regularize_refCOV
 
 CallbackType = Callable[[torch.Tensor, int, torch.Tensor], None]
 
@@ -163,8 +164,11 @@ class GEDAIStream:
         self._chunk_sequence = 0
         self.verbose_timing = bool(verbose_timing)
 
-        # Load the reference covariance once and reuse it across incoming chunks.
+        # Load the reference covariance once and cache its regularization for reuse.
         self._leadfield = self._load_leadfield(leadfield)
+        self._refCOV_reg, self._refCOV_mean_eval = regularize_refCOV(
+            self._leadfield, dtype=self.dtype, device=self.device
+        )
         self._closed = False
         self._reset_internal_state(reset_channels=True)
 
@@ -256,6 +260,8 @@ class GEDAIStream:
         self._shutdown_executor(cancel_futures=True)
         self._reset_internal_state(reset_channels=True)
         self._leadfield = None
+        self._refCOV_reg = None
+        self._refCOV_mean_eval = None
         self._closed = True
 
     def __enter__(self) -> GEDAIStream:
@@ -739,6 +745,8 @@ class GEDAIStream:
                 maxiter=self.maxiter,
                 skip_checks_and_return_cleaned_only=False,
                 verbose_timing=self.verbose_timing,
+                refCOV_reg_precomputed=self._refCOV_reg,
+                mean_eval_precomputed=self._refCOV_mean_eval,
             )
         except Exception as exc:
             warnings.warn(f"Threshold computation failed: {exc}. Using previous thresholds.")
@@ -811,6 +819,8 @@ class GEDAIStream:
                 skip_checks_and_return_cleaned_only=True,
                 artifact_thresholds_override=thresholds_for_run,
                 verbose_timing=self.verbose_timing,
+                refCOV_reg_precomputed=self._refCOV_reg,
+                mean_eval_precomputed=self._refCOV_mean_eval,
             )
             if history is not None and history.numel() > 0:
                 return cleaned_window[:, -chunk_samples:].contiguous()
