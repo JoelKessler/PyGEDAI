@@ -42,8 +42,6 @@ class Profiler:
                 return
             print("\n=== Global GEDAI timing report ===")
             for name, interval, total in self._records:
-                if interval*1000 < 300.0:
-                    continue
                 print(f"{name}: {interval*1000:.3f} ms (since start {total*1000:.3f} ms)")
             total_time = self._last - self._start
             print(f"Total elapsed: {total_time*1000:.3f} ms")

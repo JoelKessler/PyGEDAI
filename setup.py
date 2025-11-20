@@ -6,7 +6,7 @@ with open("README.md", "r", encoding="utf-8") as fh:
 setup(
     name="pygedai",
     description="PyGEDAI: Generalized Eigenvalue De-Artifacting Instrument in Python",
-    version="0.1.0",
+    version="1.0.0",
     author="Joel Kessler",
     license="PolyForm Noncommercial License 1.0.0",
     packages=find_packages(),
@@ -25,7 +25,7 @@ setup(
         "Documentation": "https://github.com/JoelKessler/PyGEDAI#readme",
     },
     install_requires=[
-        # pure-Python deps here, but NOT torch
+        "torch>=2.2.0",  # torch is mandatory for the core API
     ],
     extras_require={
         # do: pip install pygedai[torch]

@@ -6,7 +6,7 @@ This library implements the Generalized Eigenvalue De-Artifacting Instrument (GE
 
 ## What GEDAI Does
 
-GEDAI (Generalized Eigenvalue De-Artifacting Instrument) is an unsupervised, theoretically grounded denoiser for heavily contaminated EEG. It contrasts each epoch’s covariance with a physics-based forward model (leadfield), retaining only components that behave like genuine neural activity—no clean calibration data or manual supervision required.
+GEDAI (Generalized Eigenvalue De-Artifacting Instrument) is an unsupervised, theoretically grounded denoiser for heavily contaminated EEG. It contrasts each epoch’s covariance with a physics-based forward model (leadfield), retaining only components that behave like genuine neural activity, no clean calibration data or manual supervision required.
 
 **Core mechanism:** A generalized eigenvalue decomposition (GEVD) compares the data covariance (`dataCOV`) with a leadfield-derived reference covariance (`refCOV`). Components aligned with the brain subspace are kept; orthogonal components are treated as artifacts. The Signal & Noise Subspace Alignment Index (SENSAI) automatically selects the optimal rejection threshold. See [Ros et al., 2025](https://doi.org/10.1101/2025.10.04.680449) for full details.
 
@@ -51,6 +51,76 @@ The notebook `testing/Test.ipynb` covers an end-to-end example, including plots 
 
 ---
 
+## Real Time Streaming
+
+`GEDAIStream` keeps a rolling buffer of incoming EEG chunks, periodically recomputes artifact thresholds, and applies them to each new chunk without reinitializing the optimizer. Use the `gedai_stream()` factory to create a configured stream when you need continuous denoising or want to embed GEDAI inside acquisition software.
+
+- `sfreq`: Sampling frequency in Hz.
+- `leadfield`: Square reference covariance (`channels × channels`) that anchors the GEVD.
+- `threshold_update_interval_sec`: How often (seconds of streamed data) to refresh artifact thresholds once the initial pass has completed.
+- `initial_threshold_delay_sec`: Minimum buffered duration before the first threshold computation, letting the optimizer see a representative window.
+- `buffer_max_sec`: Size cap (seconds) on the rolling buffer used for threshold estimation to keep memory usage bounded.
+- `processing_window_sec`: Optional batching window (seconds) for cleaning. When set, incoming chunks are concatenated until the window length is reached, then processed as a single batch; synchronous calls return `None` until enough data is accumulated.
+- `moving_window_chunk_sec`: Size of the raw-history tail (seconds) that is prepended to every chunk before cleaning. GEDAI uses this overlapping context to avoid boundary artifacts; when both options are set the moving-window duration must exceed `processing_window_sec` so enough historical context is available beyond the active chunk.
+- `denoising_strength`: Same semantics as `gedai()` (`"auto"`, `"auto-"`, `"auto+"`, or numeric); governs artifact rejection aggressiveness.
+- `epoch_size_in_cycles`, `lowcut_frequency`, `wavelet_levels`, `matlab_levels`: Wavelet configuration forwarded to `gedai()`, controlling frequency resolution and band selection.
+- `device`, `dtype`: Target torch device/dtype for buffering and computation.
+- `TolX`, `maxiter`: Convergence tolerance and iteration cap for SENSAI's golden-section search during threshold discovery.
+- `max_concurrent_chunks`: Upper bound on how many chunks are allowed to be in-flight at once when using callbacks. Set to `-1` to disable back-pressure entirely and let submissions proceed without waiting.
+- `num_workers`: Thread pool size used for asynchronous cleaning; pass an explicit value to cap executor threads even when `max_concurrent_chunks=-1`. When omitted it mirrors `max_concurrent_chunks`, or falls back to Python's default when back-pressure is disabled.
+
+```python
+import torch
+from pygedai import gedai_stream
+
+leadfield = torch.load("leadfield_61ch.pt")
+stream = gedai_stream(sfreq=250.0, leadfield=leadfield, device="cpu", threshold_update_interval_sec=10.0, initial_threshold_delay_sec=5.0)
+
+with stream:
+  for chunk in acquire_eeg_chunks():
+    cleaned_chunk = stream.next(chunk)
+    handle_cleaned_eeg(cleaned_chunk)
+```
+
+When you need non-blocking streaming, pass a `callback` to `stream.next`, control back-pressure with `max_concurrent_chunks`, and adjust `num_workers` to set the thread count. Setting `max_concurrent_chunks=-1` disables back-pressure entirely so the main loop never waits, while `num_workers` caps the executor's parallelism when provided.
+
+```python
+cleaned_chunks: dict[int, torch.Tensor] = {}
+
+def handle_cleaned_chunk(cleaned_chunk: torch.Tensor, chunk_index: int, raw_chunk: torch.Tensor) -> None:
+  # Cache results while the main loop keeps submitting new chunks.
+  cleaned_chunks[chunk_index] = cleaned_chunk.detach().cpu()
+
+stream = gedai_stream(
+  sfreq=fs,
+  leadfield=leadfield_cov,
+  initial_threshold_delay_sec=10.0,
+  threshold_update_interval_sec=10.0,
+  max_concurrent_chunks=-1,
+  num_workers=4,
+)
+
+with stream:
+  for idx, chunk in enumerate(eeg_chunks):
+    stream.next(chunk, callback=handle_cleaned_chunk)
+    # Perform logging, plotting, or acquisition work while GEDAI runs on a worker thread.
+
+# Cleaned tensors are available in cleaned_chunks once the callbacks have fired.
+```
+
+If you set `processing_window_sec`, the stream buffers consecutive chunks until that many seconds of data are collected. Each window is cleaned (and delivered via callback, if provided) as a single block so downstream consumers always see window-aligned segments.
+When `callback` is omitted, `next()` returns `None` until a full window has been accumulated and then yields the cleaned window-sized tensor.
+
+Configure `moving_window_chunk_sec` when you want each chunk (or processing window) to include a short tail of the immediately preceding raw data. This overlapping context keeps GEDAI’s wavelet bands from seeing abrupt edges, reduces artifacts near chunk boundaries, and determines how much history is stored in the stream’s `state`. Leave it unset to run on non-overlapping chunks, or choose a value strictly greater than `processing_window_sec` to keep extra historical context beyond the active window.
+
+Threshold updates run on the main streaming thread. When it's time to refresh, the stream waits for all currently running cleaning jobs to finish, then recomputes the thresholds, and only after that lets new chunks be processed. Jobs that were already running use the old thresholds. All chunks after the update use the new ones.
+
+The notebook `testing/RealTimeEEG.ipynb` contains a full example that pairs this pattern with a `queue.Queue` to plot real-time updates while GEDAI runs concurrently.
+
+Call `stream.reset()` to clear thresholds while keeping the leadfield or `stream.close()` when shutting down the pipeline. The `state` property surfaces the current buffer and thresholds so you can checkpoint progress between sessions.
+
+---
+
 ## Deployment & Local Testing
 
 ### Build source and wheel distributions
@@ -77,7 +147,7 @@ conda activate pygedai
 pip install mne
 pip install "torch==2.2.2"
 pip install "numpy==1.26.4"
-pip install dist/pygedai-0.1.0-py3-none-any.whl --force-reinstall
+pip install dist/pygedai-1.0.0-py3-none-any.whl --force-reinstall
 ```
 
 Adjust the Python version and dependency pins as needed for your platform (the above works well on Intel macOS).
@@ -132,7 +202,6 @@ result = gedai(
   eeg,
   sfreq=raw.info["sfreq"],
   denoising_strength="auto",
-  epoch_size=1.0,
   leadfield=leadfield,
   device=device,
 )
@@ -150,7 +219,7 @@ Successful execution prints the cleaned array shape and a SENSAI quality score.
 
 ## `gedai()`
 
-`gedai(eeg, sfreq, denoising_strength="auto", epoch_size=1.0, leadfield=None, *, wavelet_levels=9, matlab_levels=None, chanlabels=None, device="cpu", dtype=torch.float32, skip_checks_and_return_cleaned_only=False, batched=False, verbose_timing=False, TolX=1e-1, maxiter=500)`
+`gedai(eeg, sfreq, denoising_strength="auto", leadfield=None, *, epoch_size_in_cycles=12.0, lowcut_frequency=0.5, wavelet_levels=9, matlab_levels=None, chanlabels=None, device="cpu", dtype=torch.float32, skip_checks_and_return_cleaned_only=False, batched=False, verbose_timing=False, TolX=1e-1, maxiter=500)`
 
 ### Purpose
 
@@ -170,7 +239,8 @@ Execute the GEDAI pipeline on a single EEG recording shaped `(channels, samples)
   - `"auto+"`: More conservative filtering (noise multiplier = 1.0).
   - Numeric value (`0.0–12.0` typical): Manual threshold passed directly to the optimizer.
   Internally this value is forwarded to `artifact_threshold_type` in `gedai_per_band()`.
-- `epoch_size`: Desired epoch duration in seconds. The helper enforces an even number of samples via `_ensure_even_epoch_size`, padding and trimming as necessary.
+- `epoch_size_in_cycles`: Number of wave cycles to cover when determining per-band epoch lengths (default `12.0`). Lower values shorten high-frequency epochs; higher values lengthen low-frequency epochs.
+- `lowcut_frequency`: Exclude wavelet bands whose upper frequency bound is at or below this threshold (Hz). Defaults to `0.5` to remove slow drifts.
 - `wavelet_levels`: Number of Haar MODWT levels when `matlab_levels` is `None`. Typical values fall between `7` and `9`.
 - `matlab_levels`: Alternative to `wavelet_levels`, recreating MATLAB level numbering with `2**matlab_levels + 1` bands. Leave `None` unless porting MATLAB scripts directly.
 - `chanlabels`: Placeholder for channel label remapping. Currently not implemented and raises an error when supplied.
@@ -181,6 +251,8 @@ Execute the GEDAI pipeline on a single EEG recording shaped `(channels, samples)
 - `verbose_timing`: Enables profiling markers emitted by `profiling.py`, useful for benchmarking.
 - `TolX`: Convergence tolerance for the golden-section search used during automatic thresholding (default `1e-1`).
 - `maxiter`: Maximum iterations allowed for the threshold optimizer (default `500`).
+
+The broadband stage follows MATLAB by using a 1 s epoch (rounded to an even number of samples) before the wavelet decomposition step.
 
 ### Returns
 
@@ -194,6 +266,8 @@ By default returns a dictionary with:
 - `artifact_threshold_broadband`: Threshold used during the initial broadband pass.
 - `epoch_size_used`: Actual epoch duration in seconds after enforcing an even sample count.
 - `refCOV`: Reference covariance matrix used for GEVD.
+- `epoch_sizes_per_band`: Per-band epoch durations (seconds) derived from `epoch_size_in_cycles`.
+- `lowcut_frequency_used`: Effective low-cut frequency after adjusting for data length constraints.
 
 When `skip_checks_and_return_cleaned_only=True`, the function returns only the `cleaned` tensor.
 
@@ -208,7 +282,7 @@ When `skip_checks_and_return_cleaned_only=True`, the function returns only the `
 
 ## `batch_gedai()`
 
-`batch_gedai(eeg_batch, sfreq, denoising_strength="auto", epoch_size=1.0, leadfield=None, *, wavelet_levels=9, matlab_levels=None, chanlabels=None, device="cpu", dtype=torch.float32, parallel=True, max_workers=None, verbose_timing=False, TolX=1e-1, maxiter=500)`
+`batch_gedai(eeg_batch, sfreq, denoising_strength="auto", leadfield=None, *, epoch_size_in_cycles=12.0, lowcut_frequency=0.5, wavelet_levels=9, matlab_levels=None, chanlabels=None, device="cpu", dtype=torch.float32, parallel=True, max_workers=None, verbose_timing=False, TolX=1e-1, maxiter=500)`
 
 ### Purpose
 
@@ -222,7 +296,7 @@ Vectorize the GEDAI pipeline across a batch dimension. Input tensors must be sha
 
 ### Key Optional Parameters
 
-- `denoising_strength`, `epoch_size`, `wavelet_levels`, `matlab_levels`, `chanlabels`, `device`, `dtype`, `TolX`, `maxiter`: Match the semantics of the corresponding arguments on `gedai()` and are forwarded per sample.
+- `denoising_strength`, `epoch_size_in_cycles`, `lowcut_frequency`, `wavelet_levels`, `matlab_levels`, `chanlabels`, `device`, `dtype`, `TolX`, `maxiter`: Match the semantics of the corresponding arguments on `gedai()` and are forwarded per sample.
 - `parallel`: When `True`, executes each batch element in a `ThreadPoolExecutor`. Set to `False` for serial execution or debugging.
 - `max_workers`: Overrides the number of worker threads when `parallel` is enabled. Defaults to Python's heuristic based on CPU count.
 - `verbose_timing`: Aggregates profiling information across the batch to assist throughput measurements.
@@ -276,25 +350,17 @@ This mirrors the workflow shown in `testing/Test.ipynb`, where the cleaned batch
       pass # torch was already initialised
   ```
   The `set_num_threads` calls must run before PyTorch initialises; future Python 3.14+ releases are expected to reduce the need for this workaround.
-- The pipeline enforces even epoch lengths. If the requested epoch and sampling rate yield an odd sample count, GEDAI pads before processing and trims afterward.
+- The pipeline enforces even epoch lengths. Incomplete epochs are padded via reflection rather than cropped, and the padding is trimmed after denoising.
+- Adjust `epoch_size_in_cycles` or `lowcut_frequency` when targeting specific bandwidths: higher cycle counts improve low-frequency stability while higher low-cut values skip slow drifts and reduce required epoch durations.
 - When running on GPU, move both EEG data and leadfield tensors to the target device prior to calling the API.
 - Enable `verbose_timing=True` during development to gather profiling markers such as `start_batch`, `modwt_analysis`, and `batch_done`.
 - If you only require cleaned signals, set `skip_checks_and_return_cleaned_only=True` to avoid collecting diagnostic metadata.
 - Automatic threshold selection relies on `sensai_fminbnd` (golden-section minimization) and may run up to `maxiter` iterations; supplying fixed thresholds dramatically reduces runtime.
 
----
-
-## Citation
-
-Ros, T., Férat, V., Huang, Y., Colangelo, C., Kia, S. M., Wolfers, T., Vulliemoz, S., & Michela, A. (2025). *Return of the GEDAI: Unsupervised EEG Denoising based on Leadfield Filtering*. bioRxiv. https://doi.org/10.1101/2025.10.04.680449
-
-When referencing this Python package, please also acknowledge that it ports the original MATLAB/EEGLAB plugin available at https://github.com/neurotuning/GEDAI-master.
-
----
 
 ## License
 
-This port follows the PolyForm Noncommercial License 1.0.0, identical to the original GEDAI plugin. The core algorithms are patent pending; commercial use requires obtaining the appropriate license from the patent holders. See [LICENSE](LICENSE) for full terms and contact information.
+This port follows the PolyForm Noncommercial License 1.0.0, identical to the original GEDAI plugin. The core algorithms are patent pending; commercial use requires obtaining the appropriate license from the patent holders. See [LICENSE](https://github.com/JoelKessler/PyGEDAI/blob/main/LICENSE) for full terms and contact information.
 
 ---
 

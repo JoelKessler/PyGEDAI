@@ -10,6 +10,23 @@ from .SENSAI_fminbnd import sensai_fminbnd
 from .SENSAI import sensai
 from .create_cosine_weights import create_cosine_weights
 
+def regularize_refCOV(refCOV: torch.Tensor, device: Union[str, torch.device], dtype: torch.dtype):
+    n_ch = refCOV.size(0) # X.shape[0] = channel size while refCov is (n_ch, n_ch)
+
+    # Reference covariance regularization
+    regularization_lambda = 0.05
+    eps_stability = 1e-12
+    evals = torch.linalg.eigvalsh(refCOV)
+    mean_eval = float(evals.mean().item())
+    mean_eval = max(mean_eval, eps_stability)
+    refCOV_reg = (
+        (1.0 - regularization_lambda) * refCOV
+        + regularization_lambda * mean_eval * torch.eye(n_ch, device=device, dtype=dtype)
+    )
+    refCOV_reg = (0.5 * (refCOV_reg + refCOV_reg.T)).to(device=device, dtype=dtype)
+
+    return refCOV_reg, mean_eval
+
 def gedai_per_band(
     eeg_data: torch.Tensor,
     srate: float,
@@ -17,6 +34,8 @@ def gedai_per_band(
     artifact_threshold_type,
     epoch_size: float,
     refCOV: torch.Tensor,
+    refCOV_reg: torch.Tensor,
+    mean_eval: float,
     optimization_type: str,
     parallel: bool,
     TolX: float = 1e-1,
@@ -54,7 +73,7 @@ def gedai_per_band(
     if X.ndim != 2:
         raise ValueError("Input EEG data must be a 2D matrix (channels x samples).")
     n_ch = X.size(0)
-    pnts = X.size(1)
+    pnts_original = int(X.size(1))
     epoch_samples_float = srate * epoch_size
     if abs(epoch_samples_float - round(epoch_samples_float)) > 1e-12:
         raise ValueError("srate*epoch_size must yield an integer number of samples.")
@@ -63,8 +82,16 @@ def gedai_per_band(
         raise ValueError("epoch_samples must be positive.")
     if epoch_samples % 2 != 0:
         raise ValueError("epoch_samples must be even so shifting=epoch_samples/2 is integer.")
-    num_epochs = int(pnts // epoch_samples)
-    X = X[:, : epoch_samples * num_epochs]
+    remainder = pnts_original % epoch_samples
+    pad_right = epoch_samples - remainder if remainder else 0
+    if pad_right:
+        width = X.size(1)
+        if width <= 0:
+            raise ValueError("Cannot reflectively pad empty EEG data.")
+        repeats = (pad_right + width - 1) // width
+        padding = torch.flip(X, dims=[1]).repeat(1, repeats)[:, :pad_right]
+        X = torch.cat([X, padding], dim=1)
+    num_epochs = int(X.size(1) // epoch_samples)
     shifting = epoch_samples // 2
     if num_epochs > 0:
         EEGdata_epoched = X.unfold(dimension=1, size=epoch_samples, step=epoch_samples).permute(0, 2, 1)
@@ -98,17 +125,8 @@ def gedai_per_band(
         COV_2 = torch.zeros((n_ch, n_ch, 0), device=device, dtype=dtype)
     if verbose_timing:
         profiling.mark("cov2_computed")
-    # Reference covariance regularization
-    regularization_lambda = 0.05
+
     eps_stability = 1e-12
-    evals = torch.linalg.eigvalsh(refCOV)
-    mean_eval = float(evals.mean().item())
-    mean_eval = max(mean_eval, eps_stability)
-    refCOV_reg = (
-        (1.0 - regularization_lambda) * refCOV
-        + regularization_lambda * mean_eval * torch.eye(n_ch, device=device, dtype=dtype)
-    )
-    refCOV_reg = 0.5 * (refCOV_reg + refCOV_reg.T)
     
     # HARDENING: dead-epoch ridge
     if N_epochs > 0:
@@ -202,6 +220,8 @@ def gedai_per_band(
             artifact_threshold = float(artifact_threshold_type)
         except Exception as e:
             raise ValueError("artifact_threshold_type must be 'auto*' or numeric.") from e
+    if verbose_timing:
+        profiling.mark("artifact_threshold_determined")
     # Clean EEG data
     cleaned_data_1, artifacts_data_1, artifact_threshold_out = clean_eeg(
         EEGdata_epoched, srate, epoch_size, artifact_threshold, refCOV, Eval, Evec,
@@ -220,6 +240,8 @@ def gedai_per_band(
     if verbose_timing:
         profiling.mark("clean_eeg_2_done")
     cosine_weights = create_cosine_weights(n_ch, srate, epoch_size, True, device=device, dtype=dtype)
+    if verbose_timing:
+        profiling.mark("cosine_weights_ready")
     size_reconstructed_2 = cleaned_data_2.size(1)
     sample_end = size_reconstructed_2 - shifting
     if size_reconstructed_2 > 0 and shifting > 0:
@@ -238,6 +260,10 @@ def gedai_per_band(
             artifacts_data[:, sl] += artifacts_data_2
     if verbose_timing:
         profiling.mark("combine_done")
+    if pad_right:
+        cleaned_data = cleaned_data[:, :pnts_original]
+        if not skip_checks_and_return_cleaned_only:
+            artifacts_data = artifacts_data[:, :pnts_original]
     if skip_checks_and_return_cleaned_only:
         return cleaned_data, None, None, None
     _, _, SENSAI_score = sensai(
