@@ -6,7 +6,7 @@ This library implements the Generalized Eigenvalue De-Artifacting Instrument (GE
 
 ## What GEDAI Does
 
-GEDAI (Generalized Eigenvalue De-Artifacting Instrument) is an unsupervised, theoretically grounded denoiser for heavily contaminated EEG. It contrasts each epoch’s covariance with a physics-based forward model (leadfield), retaining only components that behave like genuine neural activity—no clean calibration data or manual supervision required.
+GEDAI (Generalized Eigenvalue De-Artifacting Instrument) is an unsupervised, theoretically grounded denoiser for heavily contaminated EEG. It contrasts each epoch’s covariance with a physics-based forward model (leadfield), retaining only components that behave like genuine neural activity, no clean calibration data or manual supervision required.
 
 **Core mechanism:** A generalized eigenvalue decomposition (GEVD) compares the data covariance (`dataCOV`) with a leadfield-derived reference covariance (`refCOV`). Components aligned with the brain subspace are kept; orthogonal components are treated as artifacts. The Signal & Noise Subspace Alignment Index (SENSAI) automatically selects the optimal rejection threshold. See [Ros et al., 2025](https://doi.org/10.1101/2025.10.04.680449) for full details.
 
