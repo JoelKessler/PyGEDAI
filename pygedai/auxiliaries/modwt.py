@@ -1,5 +1,6 @@
 import torch
 from typing import List, Dict, Tuple, Optional
+import math
 
 # Cache COE shift indices per (n_samples, J) pair so repeated GEDAI calls
 # don't re-run impulse MODWT reconstructions. Values are stored on CPU and
@@ -129,6 +130,12 @@ def _imodwt_haar_multi(W_stack: torch.Tensor, VJ: torch.Tensor) -> torch.Tensor:
     k = torch.arange(T, device=device, dtype=fdtype)
     angles = -2.0 * torch.pi * k / float(T)
     twiddle = torch.exp(1j * angles).to(dtype=cdtype) # (T,)
+    twiddle_pows: List[torch.Tensor] = []
+    twiddle_power = twiddle
+    for _ in range(J):
+        twiddle_pows.append(twiddle_power)
+        twiddle_power = twiddle_power * twiddle_power
+    inv_sqrt2_const = torch.tensor(1.0 / math.sqrt(2.0), device=device, dtype=cdtype)
 
     # Prepare initial state in frequency domain for all J target bands
     V0 = VJ.unsqueeze(0).expand(J, C, T).contiguous().to(fdtype)
@@ -137,30 +144,25 @@ def _imodwt_haar_multi(W_stack: torch.Tensor, VJ: torch.Tensor) -> torch.Tensor:
     # Pre-FFT of all W_j once (we'll select per level)
     FW_all = torch.fft.fft(W_stack.to(cdtype), dim=-1) # (J, C, T)
 
-    # Identity used to build one-hot selectors without reallocating each loop
-    eye = torch.eye(J, device=device, dtype=cdtype)
-
     # Walk levels from J..1, inserting the matching W only for its band
     for level in range(J, 0, -1):
-        s = 2 ** (level - 1)
-        z = twiddle ** s # (T,)
+        z = twiddle_pows[level - 1]
 
         # Haar analysis frequency responses
-        inv_sqrt2 = (z.real.new_tensor(1.0) / torch.sqrt(z.real.new_tensor(2.0))).to(cdtype)
-        Hj = (1 - z) * inv_sqrt2
-        Gj = (1 + z) * inv_sqrt2
+        Hj = (1 - z) * inv_sqrt2_const
+        Gj = (1 + z) * inv_sqrt2_const
         inv_denom = 1.0 / (torch.abs(Gj) ** 2 + torch.abs(Hj) ** 2) # (T,)
-
-        # Select FW for this level: only the batch whose target band == level uses W[level-1]
-        # Build a mask that is 1 for batch==level-1 else 0, shape (J, 1, 1) to broadcast
-        mask = eye[:, level - 1].view(J, 1, 1)
-        FW_sel = FW_all[level - 1].unsqueeze(0) * mask # (J, C, T)
+        band_idx = level - 1
 
         # Vectorized update for all J reconstructions
-        FV = (torch.conj(Gj) * FV + torch.conj(Hj) * FW_sel) * inv_denom  # (J, C, T)
+        FV = torch.conj(Gj) * FV
+        FV *= inv_denom
+        FV[band_idx] += (torch.conj(Hj) * FW_all[band_idx]) * inv_denom
 
     # After descending to level 1, V holds each per-band reconstruction
-    return torch.fft.ifft(FV, dim=-1).real.to(fdtype) # (J, C, T)
+    result = torch.fft.ifft(FV, dim=-1).real.to(fdtype)
+    
+    return result # (J, C, T)
 
 def _compute_coe_shifts_vec(n_samples: int, J: int, device, dtype=torch.float32) -> torch.Tensor:
     """
