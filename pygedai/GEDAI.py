@@ -132,6 +132,8 @@ def gedai(
     TolX: float = 1e-1,
     maxiter: int = 500,
     artifact_thresholds_override: Optional[Union[torch.Tensor, Sequence[float]]] = None,
+    refCOV_reg_precomputed: Optional[torch.Tensor] = None,
+    mean_eval_precomputed: Optional[torch.Tensor] = None,
 ) -> Union[Dict[str, Any], torch.Tensor]:
     """Run the GEDAI cleaning pipeline on raw or preprocessed EEG.
 
@@ -149,6 +151,8 @@ def gedai(
       and returns only the cleaned EEG tensor.
     - artifact_thresholds_override: optional sequence/tensor of thresholds
             (broadband first, followed by per-band) to reuse without re-optimizing.
+    - refCOV_reg_precomputed / mean_eval_precomputed: optional cached outputs from
+          regularize_refCOV helping high-throughput callers skip redundant work.
 
     The function returns a dictionary containing cleaned data,
     estimated artifacts, per-band sensai scores and thresholds, the
@@ -213,8 +217,18 @@ def gedai(
         raise ValueError(
             f"leadfield covariance must be ({n_ch}, {n_ch}), got {leadfield_t.shape}."
         )
+    
     refCOV = leadfield_t
-    refCOV_reg, mean_eval = regularize_refCOV(refCOV, dtype=dtype, device=device)
+    overrides_provided = (refCOV_reg_precomputed is not None) or (mean_eval_precomputed is not None)
+    
+    if overrides_provided and (refCOV_reg_precomputed is None or mean_eval_precomputed is None):
+        raise ValueError("Both refCOV_reg_precomputed and mean_eval_precomputed must be provided together.")
+    
+    if overrides_provided:
+        refCOV_reg = refCOV_reg_precomputed.to(device=device, dtype=dtype)
+        mean_eval = mean_eval_precomputed
+    else:
+        refCOV_reg, mean_eval = regularize_refCOV(refCOV, dtype=dtype, device=device)
 
     if verbose_timing:
         profiling.mark("leadfield_loaded")
