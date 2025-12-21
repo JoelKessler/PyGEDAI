@@ -47,6 +47,7 @@ class GEDAIStream:
         moving_window_chunk_sec: Optional[float] = None,
         TolX: float = 1e-1,
         maxiter: int = 500,
+        enova_threshold: Optional[float] = None,
         max_concurrent_chunks: int = 1,
         num_workers: Optional[int] = None,
         verbose_timing: bool = False,
@@ -76,6 +77,7 @@ class GEDAIStream:
         self.dtype = dtype
         self.TolX = TolX
         self.maxiter = maxiter
+        self.enova_threshold = enova_threshold
 
         self.threshold_update_interval_sec = float(threshold_update_interval_sec)
         self.initial_threshold_delay_sec = float(initial_threshold_delay_sec)
@@ -747,6 +749,7 @@ class GEDAIStream:
                 verbose_timing=self.verbose_timing,
                 refCOV_reg_precomputed=self._refCOV_reg,
                 mean_eval_precomputed=self._refCOV_mean_eval,
+                enova_threshold=self.enova_threshold,
             )
         except Exception as exc:
             warnings.warn(f"Threshold computation failed: {exc}. Using previous thresholds.")
@@ -821,6 +824,7 @@ class GEDAIStream:
                 verbose_timing=self.verbose_timing,
                 refCOV_reg_precomputed=self._refCOV_reg,
                 mean_eval_precomputed=self._refCOV_mean_eval,
+                enova_threshold=self.enova_threshold,
             )
             if history is not None and history.numel() > 0:
                 return cleaned_window[:, -chunk_samples:].contiguous()
@@ -871,6 +875,7 @@ def gedai_stream(
     moving_window_chunk_sec: Optional[float] = None,
     TolX: float = 1e-1,
     maxiter: int = 500,
+    enova_threshold: Optional[float] = None,
     max_concurrent_chunks: int = 1,
     num_workers: Optional[int] = None,
     verbose_timing: bool = False,
@@ -894,6 +899,7 @@ def gedai_stream(
         moving_window_chunk_sec=moving_window_chunk_sec,
         TolX=TolX,
         maxiter=maxiter,
+        enova_threshold=enova_threshold,
         max_concurrent_chunks=max_concurrent_chunks,
         num_workers=num_workers,
         verbose_timing=verbose_timing,
