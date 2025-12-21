@@ -60,7 +60,8 @@ def batch_gedai(
     max_workers: int | None = None,
     verbose_timing: bool = False,
     TolX: float = 1e-1,
-    maxiter: int = 500
+    maxiter: int = 500,
+    enova_threshold: Optional[float] = None,
 ):
     if verbose_timing:
         profiling.reset()
@@ -93,7 +94,8 @@ def batch_gedai(
                 batched=True,
                 verbose_timing=bool(verbose_timing),
                 TolX=TolX,
-                maxiter=maxiter
+                maxiter=maxiter,
+                enova_threshold=enova_threshold,
             )
         except:
             print(f"GEDAI failed for batch index {eeg_idx}. Returning unmodified data.")
@@ -134,6 +136,7 @@ def gedai(
     artifact_thresholds_override: Optional[Union[torch.Tensor, Sequence[float]]] = None,
     refCOV_reg_precomputed: Optional[torch.Tensor] = None,
     mean_eval_precomputed: Optional[torch.Tensor] = None,
+    enova_threshold: Optional[float] = None,
 ) -> Union[Dict[str, Any], torch.Tensor]:
     """Run the GEDAI cleaning pipeline on raw or preprocessed EEG.
 
@@ -153,6 +156,7 @@ def gedai(
             (broadband first, followed by per-band) to reuse without re-optimizing.
     - refCOV_reg_precomputed / mean_eval_precomputed: optional cached outputs from
           regularize_refCOV helping high-throughput callers skip redundant work.
+    - enova_threshold: optional float in [0, 1] controlling ENOVA-based epoch rejection.
 
     The function returns a dictionary containing cleaned data,
     estimated artifacts, per-band sensai scores and thresholds, the
@@ -186,6 +190,12 @@ def gedai(
     epoch_size_in_cycles = float(epoch_size_in_cycles)
     if epoch_size_in_cycles <= 0.0:
         raise ValueError("epoch_size_in_cycles must be positive.")
+    if enova_threshold is not None:
+        enova_threshold = float(enova_threshold)
+        if not math.isfinite(enova_threshold):
+            raise ValueError("enova_threshold must be finite when provided.")
+        if enova_threshold < 0.0 or enova_threshold > 1.0:
+            raise ValueError("enova_threshold must lie within [0, 1].")
 
     if verbose_timing:
         # Prepare profiler for this run so marks inside helper modules
@@ -491,39 +501,106 @@ def gedai(
     if verbose_timing:
         profiling.mark("bands_summed")
 
-    if skip_checks_and_return_cleaned_only:
-        # trim back to original length if we padded
+    need_post_processing = (not skip_checks_and_return_cleaned_only) or (enova_threshold is not None)
+    if not need_post_processing:
         if pad_right:
             cleaned = cleaned[:, :T_in]
         if verbose_timing:
             profiling.mark("done_return_cleaned_only")
             profiling.report()
         return cleaned
-    
+
     artifacts = eeg_ref_proc[:, :cleaned.size(1)] - cleaned
+    total_samples = cleaned.size(1)
+    keep_mask = torch.ones(total_samples, device=cleaned.device, dtype=torch.bool)
+    if pad_right:
+        keep_mask[T_in:] = False
+
+    sensai_score: Optional[float] = None
+    mean_enova: Optional[float] = None
+    enova_per_epoch_tensor: Optional[torch.Tensor] = None
+    enova_rejected_epochs: Optional[torch.Tensor] = None
 
     try:
-        sensai_score = float(
-            sensai_basic(
-                cleaned, 
-                artifacts, 
-                float(sfreq), 
-                float(epoch_size_used), 
-                refCOV, 
-                1.0,
-                verbose_timing=verbose_timing)[0]
+        (
+            sensai_score_val,
+            _,
+            _,
+            mean_enova_val,
+            enova_tensor,
+            epoch_samples_from_sensai,
+        ) = sensai_basic(
+            cleaned,
+            artifacts,
+            float(sfreq),
+            float(epoch_size_used),
+            refCOV,
+            1.0,
+            verbose_timing=verbose_timing,
         )
-    except Exception as ex:
+        sensai_score = float(sensai_score_val)
+        mean_enova = float(mean_enova_val)
+        enova_per_epoch_tensor = enova_tensor.to(device=cleaned.device, dtype=dtype)
+    except Exception:
         sensai_score = None
-        
-    # trim back to original length if we padded
-    if pad_right:
-        cleaned = cleaned[:, :T_in]
-        artifacts = artifacts[:, :T_in]
+        mean_enova = None
+        enova_per_epoch_tensor = None
+        epoch_samples_from_sensai = None
+
+    epoch_samples_from_sensai_int = None
+    if epoch_samples_from_sensai is not None:
+        epoch_samples_from_sensai_int = max(int(epoch_samples_from_sensai), 1)
+    if (
+        enova_threshold is not None
+        and enova_per_epoch_tensor is not None
+        and epoch_samples_from_sensai_int is not None
+    ):
+        enova_tensor = enova_per_epoch_tensor
+        rejected_mask = enova_tensor > float(enova_threshold)
+        rejected_count = int(torch.count_nonzero(rejected_mask).item())
+        if rejected_count > 0 and keep_mask.numel() > 0:
+            rejected_indices = torch.nonzero(rejected_mask, as_tuple=False).flatten()
+            enova_rejected_epochs = rejected_indices.detach().cpu()
+
+            num_epochs = int(enova_tensor.numel())
+            if num_epochs > 0 and epoch_samples_from_sensai_int > 0:
+                samples_covered = epoch_samples_from_sensai_int * num_epochs
+                samples_considered = min(samples_covered, keep_mask.numel())
+                if samples_considered > 0:
+                    sample_indices = torch.arange(
+                        samples_considered, device=keep_mask.device, dtype=torch.long
+                    )
+                    epoch_indices = torch.div(
+                        sample_indices, epoch_samples_from_sensai_int, rounding_mode="floor"
+                    )
+                    epoch_indices = torch.clamp(epoch_indices, max=num_epochs - 1)
+                    per_sample_reject = rejected_mask[epoch_indices]
+                    keep_mask[:samples_considered] = keep_mask[:samples_considered] & (~per_sample_reject)
+
+    kept_samples = int(torch.count_nonzero(keep_mask).item())
+    if kept_samples == 0:
+        warnings.warn(
+            "All samples were removed after applying ENOVA threshold; returning empty tensors.",
+            RuntimeWarning,
+        )
+        cleaned = cleaned[:, :0]
+        artifacts = artifacts[:, :0]
+    else:
+        cleaned = cleaned[:, keep_mask]
+        artifacts = artifacts[:, keep_mask]
 
     if verbose_timing:
         profiling.mark("sensai_final")
         profiling.report()
+
+    if skip_checks_and_return_cleaned_only:
+        return cleaned
+
+    enova_per_epoch_result: Optional[torch.Tensor]
+    if enova_per_epoch_tensor is None:
+        enova_per_epoch_result = None
+    else:
+        enova_per_epoch_result = enova_per_epoch_tensor.detach().clone().to(device=device, dtype=dtype)
 
     return dict(
         cleaned=cleaned,
@@ -536,6 +613,10 @@ def gedai(
         refCOV=refCOV,
         epoch_sizes_per_band=torch.as_tensor(epoch_sizes_per_wavelet_band, device=device, dtype=dtype),
         lowcut_frequency_used=float(lowcut_frequency),
+        mean_enova=mean_enova,
+        enova_per_epoch=enova_per_epoch_result,
+        enova_threshold_used=float(enova_threshold) if enova_threshold is not None else None,
+        enova_rejected_epochs=enova_rejected_epochs,
     )
 
 def _pad_reflect_tail(data: torch.Tensor, pad_right: int) -> torch.Tensor:

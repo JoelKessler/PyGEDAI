@@ -53,7 +53,7 @@ The notebook `testing/Test.ipynb` covers an end-to-end example, including plots 
 
 ## Real Time Streaming
 
-`GEDAIStream` keeps a rolling buffer of incoming EEG chunks, periodically recomputes artifact thresholds, and applies them to each new chunk without reinitializing the optimizer. Use the `gedai_stream()` factory to create a configured stream when you need continuous denoising or want to embed GEDAI inside acquisition software.
+`GEDAIStream` keeps a rolling buffer of incoming EEG chunks, periodically recomputes artifact thresholds, and applies them to each new chunk without reinitializing the optimizer. Use the `gedai_stream()` factory to create a configured stream when you need continuous denoising or want to embed GEDAI inside acquisition software. Streaming also inherits the ENOVA-based bad-epoch rejection described later, so you can gate catastrophic artifacts online by supplying `enova_threshold` to the factory.
 
 - `sfreq`: Sampling frequency in Hz.
 - `leadfield`: Square reference covariance (`channels × channels`) that anchors the GEVD.
@@ -63,6 +63,7 @@ The notebook `testing/Test.ipynb` covers an end-to-end example, including plots 
 - `processing_window_sec`: Optional batching window (seconds) for cleaning. When set, incoming chunks are concatenated until the window length is reached, then processed as a single batch; synchronous calls return `None` until enough data is accumulated.
 - `moving_window_chunk_sec`: Size of the raw-history tail (seconds) that is prepended to every chunk before cleaning. GEDAI uses this overlapping context to avoid boundary artifacts; when both options are set the moving-window duration must exceed `processing_window_sec` so enough historical context is available beyond the active chunk.
 - `denoising_strength`: Same semantics as `gedai()` (`"auto"`, `"auto-"`, `"auto+"`, or numeric); governs artifact rejection aggressiveness.
+- `enova_threshold`: Optional float in `[0, 1]` describing the maximum explained noise variance tolerated per epoch. Values near `0.9` reject epochs whose noise accounts for >=90% of their variance, whereas a tighter cutoff such as `0.3` removes any epoch dominated by artifacts.
 - `epoch_size_in_cycles`, `lowcut_frequency`, `wavelet_levels`, `matlab_levels`: Wavelet configuration forwarded to `gedai()`, controlling frequency resolution and band selection.
 - `device`, `dtype`: Target torch device/dtype for buffering and computation.
 - `TolX`, `maxiter`: Convergence tolerance and iteration cap for SENSAI's golden-section search during threshold discovery.
@@ -251,6 +252,7 @@ Execute the GEDAI pipeline on a single EEG recording shaped `(channels, samples)
 - `verbose_timing`: Enables profiling markers emitted by `profiling.py`, useful for benchmarking.
 - `TolX`: Convergence tolerance for the golden-section search used during automatic thresholding (default `1e-1`).
 - `maxiter`: Maximum iterations allowed for the threshold optimizer (default `500`).
+- `enova_threshold`: Optional float between `0` and `1`. When set, GEDAI removes entire epochs whose explained noise variance exceeds the threshold after SENSAI scoring. This is helpful for preventing severely corrupted segments from being reintroduced during reconstruction.
 
 The broadband stage follows MATLAB by using a 1 s epoch (rounded to an even number of samples) before the wavelet decomposition step.
 
@@ -268,6 +270,10 @@ By default returns a dictionary with:
 - `refCOV`: Reference covariance matrix used for GEVD.
 - `epoch_sizes_per_band`: Per-band epoch durations (seconds) derived from `epoch_size_in_cycles`.
 - `lowcut_frequency_used`: Effective low-cut frequency after adjusting for data length constraints.
+- `mean_enova`: Average explained noise variance across all epochs.
+- `enova_per_epoch`: Vector of ENOVA scores produced by `SENSAI_basic`.
+- `enova_threshold_used`: Echoes the threshold argument when provided.
+- `enova_rejected_epochs`: Indices of epochs that were excised because they exceeded the ENOVA threshold.
 
 When `skip_checks_and_return_cleaned_only=True`, the function returns only the `cleaned` tensor.
 
@@ -330,6 +336,7 @@ This mirrors the workflow shown in `testing/Test.ipynb`, where the cleaned batch
 - The `leadfield` parameter should be a reference covariance computed from a forward model of your montage. Precomputed examples are available in `leadfield_calibrated/`.
 - **Average referencing**: GEDAI applies a non-rank-deficient average reference (dividing by `n_channels + 1`) to prevent ICA ghost components (see [Kim et al., 2023](https://doi.org/10.3389/frsip.2023.1064138)). Do not apply standard average referencing before calling GEDAI.
 - The default threshold search uses golden-section (`"parabolic"`). An optional debug mode (`"grid"`) exhaustively evaluates thresholds from 0.0 to 12.0 in 0.1 steps and is roughly 100× slower.
+- Use the ENOVA gate when you want GEDAI to skip exceptionally noisy segments entirely. Start with `enova_threshold=0.9` (90% noise) to only drop catastrophic segments or tighten to `0.3` when you prefer to analyze strictly high-quality intervals. The metric is bounded between 0 (no noise removed) and 1 (all variance explained by removed noise).
 - GEDAI typically processes ~1 s of 64-channel EEG in 0.5–2 s on CPU, depending on `wavelet_levels` and `denoising_strength`. CPU execution is usually faster than GPU because the `sensai_fminbnd` minimization dominates runtime and benefits little from GPU acceleration.
 - Use `batch_gedai()` for multiple independent trials or subjects; with `parallel=True` and adequate CPU cores, throughput scales nearly linearly with batch size.
 - If thread-pool contention or hangs arise when running `batch_gedai()` in parallel mode, set single-threaded math libraries before importing torch:

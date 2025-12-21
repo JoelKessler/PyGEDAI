@@ -54,7 +54,7 @@ def clean_eeg(
 
     EEG = EEGdata_epoched
     Ev = Eval
-    U = Evec
+    U = Evec.to(device=device, dtype=dtype)
     
     if EEG.ndim != 3:
         raise ValueError("EEGdata_epoched must be 3D: (num_chans, epoch_samples, num_epochs)")
@@ -137,6 +137,7 @@ def clean_eeg(
         mask_good = mask_keep_batched[valid_bmm]
         U_modified_good = U_good * mask_good.unsqueeze(1)
         U_modified_H_good = U_modified_good.conj().transpose(-2, -1)
+
         artifacts_timecourses_good = torch.bmm(U_modified_H_good, EEG_good)
         U_H_good = U_good.conj().transpose(-2, -1)
         sol_good = torch.linalg.lstsq(U_H_good, artifacts_timecourses_good).solution

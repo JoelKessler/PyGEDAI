@@ -19,7 +19,7 @@ def sensai_basic(
     device: Union[str, torch.device] = "cpu",
     dtype: torch.dtype = torch.float32,
     verbose_timing: bool = False,
-) -> Tuple[float, float, float]:
+) -> Tuple[float, float, float, float, torch.Tensor, int]:
     """
     Compute SENSAI score and subspace similarities.
 
@@ -46,8 +46,10 @@ def sensai_basic(
         Data type for computation. Default is torch.float32.
 
     Returns:
-    Tuple[float, float, float]
-        SENSAI score, signal subspace similarity, and noise subspace similarity.
+    Tuple[float, float, float, float, torch.Tensor, int]
+        SENSAI score, signal subspace similarity, noise subspace similarity,
+        mean ENOVA, the per-epoch ENOVA tensor, and the number of samples per
+        epoch actually used during scoring.
 
     Explainer: 
     Receive both cleaned signal and removed noise.
@@ -70,13 +72,18 @@ def sensai_basic(
     if abs(ep_len - round(ep_len)) > 1e-9:
         raise ValueError("srate*epoch_size must be an integer number of samples.")
     S = int(round(ep_len))
-    if signal_data.size(1) % S != 0 or noise_data.size(1) % S != 0:
-        raise ValueError("Total samples must be divisible by epoch_samples.")
-    E_sig = signal_data.size(1) // S
-    E_noi = noise_data.size(1) // S
-    if E_sig != E_noi:
-        raise ValueError("signal and noise must have the same number of epochs.")
-    E = E_sig
+    if S <= 0:
+        raise ValueError("Epoch size must span at least one sample.")
+
+    total_samples = min(signal_data.size(1), noise_data.size(1))
+    total_epochs = total_samples // S
+    if total_epochs == 0:
+        raise ValueError("Not enough samples to form a single epoch.")
+    usable_samples = total_epochs * S
+    signal_data = signal_data[:, :usable_samples].contiguous()
+    noise_data = noise_data[:, :usable_samples].contiguous()
+    E = total_epochs
+    epoch_samples_used = S
 
     if top_PCs > num_chans:
         raise ValueError("top_PCs must be <= number of channels.")
@@ -102,6 +109,9 @@ def sensai_basic(
 
     sig_sim = torch.empty(E, device=device, dtype=dtype)
     noi_sim = torch.empty(E, device=device, dtype=dtype)
+    enova_per_epoch = torch.empty(E, device=device, dtype=dtype)
+    dtype_for_eps = signal_data.dtype if torch.is_floating_point(signal_data) else torch.float32
+    finfo = torch.finfo(dtype_for_eps)
 
     for ep in range(E):
         # Signal subspace
@@ -120,10 +130,25 @@ def sensai_basic(
         VN = VN[:, idxN][:, :top_PCs]
         noi_sim[ep] = subspace_cosine_product(VN, VT)
 
+        original_epoch = X + N
+        var_original = torch.var(original_epoch.reshape(-1), unbiased=True)
+        var_noise = torch.var(N.reshape(-1), unbiased=True)
+        denom = torch.clamp(var_original, min=finfo.tiny)
+        enova_ratio = torch.clamp(var_noise / denom, min=0.0)
+        enova_per_epoch[ep] = enova_ratio.to(dtype=dtype)
+
     if verbose_timing:
         profiling.mark("sensai_basic_epochs_done")
     SIGNAL_subspace_similarity = 100.0 * float(sig_sim.mean().item())
     NOISE_subspace_similarity = 100.0 * float(noi_sim.mean().item())
     SENSAI_score = SIGNAL_subspace_similarity - float(NOISE_multiplier) * NOISE_subspace_similarity
+    mean_ENOVA = float(enova_per_epoch.mean().item())
 
-    return float(SENSAI_score), float(SIGNAL_subspace_similarity), float(NOISE_subspace_similarity)
+    return (
+        float(SENSAI_score),
+        float(SIGNAL_subspace_similarity),
+        float(NOISE_subspace_similarity),
+        mean_ENOVA,
+        enova_per_epoch.detach().clone(),
+        int(epoch_samples_used),
+    )
