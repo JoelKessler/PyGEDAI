@@ -17,6 +17,7 @@
 build
 dist
 PyGEDAI.egg-info
+generated_ref_cov.npy
 # User-specific files (MonoDevelop/Xamarin Studio)
 *.userprefs
 GEDAI-master/
