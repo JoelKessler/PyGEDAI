@@ -51,6 +51,46 @@ The notebook `testing/Test.ipynb` covers an end-to-end example, including plots 
 
 ---
 
+## Reference Covariance Without Templates
+
+If you already know your electrode locations, you can reuse the shipped leadfield by mapping your channels with `interpolate_ref_cov`, no template building step required. Provide a dataframe with columns `channel_name`, `X`, `Y`, `Z` (meters in head space), call the helper and pass the returned tensor straight into `gedai()`.
+
+```python
+import pandas as pd
+import mne
+import torch
+from pygedai.ref_cov import interpolate_ref_cov
+
+montage = mne.channels.make_standard_montage("GSN-HydroCel-128")
+montage_head = mne.channels.transform_to_head(montage)
+ch_pos = montage_head.get_positions()["ch_pos"]
+
+electrode_positions = (
+    pd.DataFrame.from_dict(ch_pos, orient="index", columns=["X", "Y", "Z"])
+      .reset_index()
+      .rename(columns={"index": "channel_name"})
+)
+
+ref_cov = interpolate_ref_cov(electrode_positions, dtype=torch.float64)
+
+raw_eeg = ... # load your EEG as a (channels, samples) torch tensor
+sfreq = ... # set your sampling frequency
+
+clean_eeg = gedai(
+  raw_eeg,
+  sfreq=sfreq,
+  denoising_strength="auto",
+  leadfield=ref_cov,
+  device="cpu",
+  dtype=torch.float32,
+  skip_checks_and_return_cleaned_only=True, # optional if you only want cleaned EEG
+)
+```
+
+See `testing/Interpolate RefCov.ipynb` for a more detailed walkthrough.
+
+---
+
 ## Real Time Streaming
 
 `GEDAIStream` keeps a rolling buffer of incoming EEG chunks, periodically recomputes artifact thresholds, and applies them to each new chunk without reinitializing the optimizer. Use the `gedai_stream()` factory to create a configured stream when you need continuous denoising or want to embed GEDAI inside acquisition software. Streaming also inherits the ENOVA-based bad-epoch rejection described later, so you can gate catastrophic artifacts online by supplying `enova_threshold` to the factory.
@@ -148,7 +188,7 @@ conda activate pygedai
 pip install mne
 pip install "torch==2.2.2"
 pip install "numpy==1.26.4"
-pip install dist/pygedai-1.0.1-py3-none-any.whl --force-reinstall
+pip install dist/pygedai-1.0.3-py3-none-any.whl --force-reinstall
 ```
 
 Adjust the Python version and dependency pins as needed for your platform (the above works well on Intel macOS).

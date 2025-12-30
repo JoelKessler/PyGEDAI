@@ -18,12 +18,11 @@ def sensai(
     Eval: torch.Tensor,
     Evec: torch.Tensor,
     noise_multiplier: float,
+    device: Union[str, torch.device],
+    dtype: torch.dtype,
+    skip_checks_and_return_cleaned_only: bool,
+    verbose_timing: bool,
     top_PCs: int = 3,
-    *,
-    device: Union[str, torch.device] = "cpu",
-    dtype: torch.dtype = torch.float32,
-    skip_checks_and_return_cleaned_only: bool = False,
-    verbose_timing: bool = False
 ) -> Tuple[float, float, float]:
     """
     Compute SENSAI score and subspace similarities - BATCHED VERSION.
@@ -104,8 +103,8 @@ def sensai(
 
 
     # OPTIMIZATION: Batched covariance computation 
-    cov_sig = cov_matlab_like(Sig_ep, ddof=1)  # (num_epochs, channels, channels)
-    cov_res = cov_matlab_like(Res_ep, ddof=1)  # (num_epochs, channels, channels)
+    cov_sig = cov_matlab_like(Sig_ep, ddof=1, dtype=dtype)  # (num_epochs, channels, channels)
+    cov_res = cov_matlab_like(Res_ep, ddof=1, dtype=dtype)  # (num_epochs, channels, channels)
     if verbose_timing:
         profiling.mark("sensai_cov_done")
 
