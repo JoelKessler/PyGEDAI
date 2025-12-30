@@ -2,7 +2,7 @@
 
 import torch
 
-def cov_matlab_like(X: torch.Tensor, ddof: int = 1) -> torch.Tensor:
+def cov_matlab_like(X: torch.Tensor, ddof: int, dtype) -> torch.Tensor:
     """
     MATLAB-like covariance with rowvar=False for 2D or batched 3D input.
 
@@ -21,7 +21,7 @@ def cov_matlab_like(X: torch.Tensor, ddof: int = 1) -> torch.Tensor:
     if X.dim() not in (2, 3):
         raise ValueError("X must be 2D (C,S) or 3D (B,C,S).")
 
-    X = X.to(torch.float32)
+    X = X.to(dtype=dtype)
 
     if X.dim() == 2:
         C, S = X.shape

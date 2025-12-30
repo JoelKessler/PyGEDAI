@@ -41,17 +41,17 @@ def modwt_haar(x: torch.Tensor, J: int) -> List[torch.Tensor]:
 
 def modwtmra_haar(
     coeffs: List[torch.Tensor],
-    max_detail_bands: Optional[int] = None,
-    return_smooth: bool = True,
+    max_detail_bands: Optional[int],
+    return_smooth: bool,
+    dtype
 ) -> torch.Tensor:
     """
     Vectorized MRA construction with COE alignment.
     Returns (J+1, n_channels, n_samples) with zero-phase bands.
     Output matches the previous implementation exactly.
     """
-    # Keep float32 as in your original for identical numerics
-    details_all = [d.to(dtype=torch.float32) for d in coeffs[:-1]]
-    scale = coeffs[-1].to(dtype=torch.float32)
+    details_all = [d.to(dtype=dtype) for d in coeffs[:-1]]
+    scale = coeffs[-1].to(dtype=dtype)
 
     if max_detail_bands is not None:
         details = details_all[: max(0, min(max_detail_bands, len(details_all)))]
@@ -164,7 +164,7 @@ def _imodwt_haar_multi(W_stack: torch.Tensor, VJ: torch.Tensor) -> torch.Tensor:
     
     return result # (J, C, T)
 
-def _compute_coe_shifts_vec(n_samples: int, J: int, device, dtype=torch.float32) -> torch.Tensor:
+def _compute_coe_shifts_vec(n_samples: int, J: int, device, dtype) -> torch.Tensor:
     """
     Vectorized COE shifts for all detail levels.
     Identical output to the scalar loop but ~Jx fewer Python trips.
@@ -173,7 +173,7 @@ def _compute_coe_shifts_vec(n_samples: int, J: int, device, dtype=torch.float32)
     cached = _COE_SHIFT_CACHE.get(cache_key)
     if cached is None:
         cpu = torch.device("cpu")
-        impulse = torch.zeros((1, n_samples), device=cpu, dtype=torch.float32)
+        impulse = torch.zeros((1, n_samples), device=cpu, dtype=dtype)
         center_idx = n_samples // 2
         impulse[0, center_idx] = 1.0
 
@@ -194,4 +194,4 @@ def _complex_dtype_for(dtype: torch.dtype) -> torch.dtype:
     Uses double precision complex for float32 and single precision
     complex for other float types.
     """
-    return torch.cdouble if dtype == torch.float32 else torch.cfloat
+    return torch.cdouble if dtype == torch.float32 or dtype == torch.float64 else torch.cfloat

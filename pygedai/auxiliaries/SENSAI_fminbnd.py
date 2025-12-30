@@ -125,10 +125,12 @@ def sensai_fminbnd(
     Eval: torch.Tensor,
     Evec: torch.Tensor,
     noise_multiplier: float,
-    TolX: float = 1e-1, # tolerance for threshold optimization, default was 0.1 speed/accuracy trade-off
-    skip_checks_and_return_cleaned_only: bool = False,
-    maxiter: int = 500,
-    verbose_timing: bool = False
+    TolX: float, # tolerance for threshold optimization, default was 0.1 speed/accuracy trade-off
+    skip_checks_and_return_cleaned_only: bool,
+    maxiter: int,
+    verbose_timing: bool,
+    device: str,
+    dtype: torch.dtype
 ) -> Tuple[float, float]:
     # License: PolyForm Noncommercial License 1.0.0 — see LICENSE for full terms.
     """
@@ -159,6 +161,8 @@ def sensai_fminbnd(
                 Eval=Eval,
                 Evec=Evec,
                 noise_multiplier=noise_multiplier,
+                device=device,
+                dtype=dtype,
                 skip_checks_and_return_cleaned_only=skip_checks_and_return_cleaned_only,
                 verbose_timing=verbose_timing
             )

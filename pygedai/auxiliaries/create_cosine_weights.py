@@ -11,9 +11,8 @@ def create_cosine_weights(
     srate: Union[int, float],
     epoch_size: Union[int, float],
     fullshift: bool,
-    *,
-    device: Union[str, torch.device] = "cpu",
-    dtype: torch.dtype = torch.float32,
+    device: str,
+    dtype: torch.dtype,
 ) -> torch.Tensor:
     """
     Generate cosine weights for EEG data processing.
@@ -31,10 +30,10 @@ def create_cosine_weights(
         Duration of each epoch in seconds (positive value).
     fullshift : bool
         Whether to apply full cosine weighting.
-    device : Union[str, torch.device], optional
-        Device for computation (e.g., 'cpu', 'cuda'). Default is 'cpu'.
-    dtype : torch.dtype, optional
-        Data type for computation. Default is torch.float32.
+    device : Union[str, torch.device]
+        Device for computation (e.g., 'cpu', 'cuda').
+    dtype : torch.dtype
+        Data type for computation.
 
     Returns:
     torch.Tensor

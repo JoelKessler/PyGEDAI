@@ -13,12 +13,11 @@ def sensai_basic(
     epoch_size: float,
     refCOV: torch.Tensor,
     NOISE_multiplier: float,
+    device: Union[str, torch.device],
+    dtype: torch.dtype,
+    verbose_timing: bool,
     top_PCs: int = 3,
     regularization_lambda: float = 0.05,
-    *,
-    device: Union[str, torch.device] = "cpu",
-    dtype: torch.dtype = torch.float32,
-    verbose_timing: bool = False,
 ) -> Tuple[float, float, float, float, torch.Tensor, int]:
     """
     Compute SENSAI score and subspace similarities.
@@ -41,9 +40,9 @@ def sensai_basic(
     regularization_lambda : float
         Regularization parameter for covariance matrix. Default is 0.05.
     device : Union[str, torch.device]
-        Device for computation (e.g., 'cpu', 'cuda'). Default is 'cpu'.
+        Device for computation (e.g., 'cpu', 'cuda').
     dtype : torch.dtype
-        Data type for computation. Default is torch.float32.
+        Data type for computation.
 
     Returns:
     Tuple[float, float, float, float, torch.Tensor, int]
@@ -110,13 +109,13 @@ def sensai_basic(
     sig_sim = torch.empty(E, device=device, dtype=dtype)
     noi_sim = torch.empty(E, device=device, dtype=dtype)
     enova_per_epoch = torch.empty(E, device=device, dtype=dtype)
-    dtype_for_eps = signal_data.dtype if torch.is_floating_point(signal_data) else torch.float32
+    dtype_for_eps = signal_data.dtype if torch.is_floating_point(signal_data) else dtype
     finfo = torch.finfo(dtype_for_eps)
 
     for ep in range(E):
         # Signal subspace
         X = Sig_ep[:, :, ep]
-        cov_sig = cov_matlab_like(X, ddof=1)
+        cov_sig = cov_matlab_like(X, ddof=1, dtype=dtype)
         wS, VS = torch.linalg.eigh(cov_sig)
         idxS = torch.argsort(wS, descending=True)
         VS = VS[:, idxS][:, :top_PCs]
@@ -124,7 +123,7 @@ def sensai_basic(
 
         # Noise subspace
         N = Noi_ep[:, :, ep]
-        cov_noi = cov_matlab_like(N, ddof=1)
+        cov_noi = cov_matlab_like(N, ddof=1, dtype=dtype)
         wN, VN = torch.linalg.eigh(cov_noi)
         idxN = torch.argsort(wN, descending=True)
         VN = VN[:, idxN][:, :top_PCs]

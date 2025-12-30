@@ -38,13 +38,12 @@ def gedai_per_band(
     mean_eval: float,
     optimization_type: str,
     parallel: bool,
-    TolX: float = 1e-1,
-    maxiter: int = 500,
-    *,
-    device: Union[str, torch.device] = "cpu",
-    dtype: torch.dtype = torch.float32,
-    skip_checks_and_return_cleaned_only: bool = False,
-    verbose_timing: bool = False,
+    TolX: float,
+    maxiter: int,
+    device: str,
+    dtype: torch.dtype,
+    skip_checks_and_return_cleaned_only: bool,
+    verbose_timing: bool,
 ):
     """
     PyTorch port of MATLAB GEDAI_per_band with numerical parity (batched, optimized).
@@ -114,13 +113,13 @@ def gedai_per_band(
 
     # batched covariances, shapes (C,C,E)
     if N_epochs > 0:
-        COV = _batch_cov_optimized(EEGdata_epoched, ddof=1)
+        COV = _batch_cov_optimized(EEGdata_epoched, ddof=1, dtype=dtype)
     else:
         COV = torch.zeros((n_ch, n_ch, 0), device=device, dtype=dtype)
     if verbose_timing:
         profiling.mark("cov_computed")
     if EEGdata_epoched_2.size(2) > 0:
-        COV_2 = _batch_cov_optimized(EEGdata_epoched_2, ddof=1)
+        COV_2 = _batch_cov_optimized(EEGdata_epoched_2, ddof=1, dtype=dtype)
     else:
         COV_2 = torch.zeros((n_ch, n_ch, 0), device=device, dtype=dtype)
     if verbose_timing:
@@ -150,7 +149,7 @@ def gedai_per_band(
 
     # GEVD (batched via Cholesky of refCOV), with SPD fallback
     if N_epochs > 0:
-        Evec, Eval = _gevd_chol_batched(COV, refCOV_reg)
+        Evec, Eval = _gevd_chol_batched(COV, refCOV_reg, dtype=dtype)
     else:
         Evec = torch.zeros((n_ch, n_ch, 0), device=device, dtype=dtype)
         Eval = torch.zeros((n_ch, n_ch, 0), device=device, dtype=dtype)
@@ -158,7 +157,7 @@ def gedai_per_band(
         profiling.mark("gevd_done")
 
     if COV_2.size(2) > 0:
-        Evec_2, Eval_2 = _gevd_chol_batched(COV_2, refCOV_reg)
+        Evec_2, Eval_2 = _gevd_chol_batched(COV_2, refCOV_reg, dtype=dtype)
     else:
         Evec_2 = torch.zeros((n_ch, n_ch, 0), device=device, dtype=dtype)
         Eval_2 = torch.zeros((n_ch, n_ch, 0), device=device, dtype=dtype)
@@ -170,13 +169,21 @@ def gedai_per_band(
         minThreshold, maxThreshold = 0.0, 12.0
         if optimization_type == "parabolic":
             optimal_artifact_threshold, _ = sensai_fminbnd(
-                minThreshold, maxThreshold,
-                EEGdata_epoched, srate, epoch_size,
-                refCOV, Eval, Evec,
-                noise_multiplier, TolX=TolX,
+                minThreshold, 
+                maxThreshold,
+                EEGdata_epoched, 
+                srate, 
+                epoch_size,
+                refCOV, 
+                Eval, 
+                Evec,
+                noise_multiplier, 
+                TolX=TolX,
                 skip_checks_and_return_cleaned_only=skip_checks_and_return_cleaned_only,
                 maxiter=maxiter,
-                verbose_timing=verbose_timing
+                verbose_timing=verbose_timing,
+                device=device,
+                dtype=dtype
             )
             if verbose_timing:
                 profiling.mark("threshold_optimized")
@@ -190,19 +197,27 @@ def gedai_per_band(
             SENSAI_score_sweep = torch.zeros_like(AutomaticThresholdSweep)
             for idx, thr in enumerate(AutomaticThresholdSweep):
                 S_sig, S_noise, S_score = sensai(
-                    EEGdata_epoched, srate, epoch_size, float(thr.item()),
-                    refCOV, Eval, Evec,
-                    noise_multiplier, skip_checks_and_return_cleaned_only=skip_checks_and_return_cleaned_only,
+                    EEGdata_epoched, 
+                    srate, 
+                    epoch_size, 
+                    float(thr.item()),
+                    refCOV, 
+                    Eval, 
+                    Evec,
+                    noise_multiplier, 
+                    device=device,
+                    dtype=dtype,
+                    skip_checks_and_return_cleaned_only=skip_checks_and_return_cleaned_only,
                     verbose_timing=verbose_timing
                 )
                 SIGNAL_subspace_similarity[idx] = float(S_sig)
                 NOISE_subspace_similarity[idx] = float(S_noise)
                 SENSAI_score_sweep[idx] = float(S_score)
             # Use movmean_optimized
-            smooth_noise = _movmean_optimized(NOISE_subspace_similarity, 6)
+            smooth_noise = _movmean_optimized(NOISE_subspace_similarity, 6, dtype=dtype)
             diffs = smooth_noise[1:] - smooth_noise[:-1]
             if diffs.numel() > 0:
-                cps = _findchangepts_mean_optimized(diffs, max_num_changes=2)
+                cps = _findchangepts_mean_optimized(diffs, max_num_changes=2, dtype=dtype)
                 noise_idx = len(AutomaticThresholdSweep) - 1 if len(cps) == 0 else int(cps[0])
             else:
                 noise_idx = len(AutomaticThresholdSweep) - 1
@@ -224,22 +239,46 @@ def gedai_per_band(
         profiling.mark("artifact_threshold_determined")
     # Clean EEG data
     cleaned_data_1, artifacts_data_1, artifact_threshold_out = clean_eeg(
-        EEGdata_epoched, srate, epoch_size, artifact_threshold, refCOV, Eval, Evec,
-        strict_matlab=True, device=device, dtype=dtype, 
+        EEGdata_epoched, 
+        srate, 
+        epoch_size, 
+        artifact_threshold, 
+        refCOV, 
+        Eval, 
+        Evec,
+        strict_matlab=True, 
+        device=device, 
+        dtype=dtype, 
         skip_checks_and_return_cleaned_only=skip_checks_and_return_cleaned_only,
         verbose_timing=verbose_timing
     )
     if verbose_timing:
         profiling.mark("clean_eeg_1_done")
     cleaned_data_2, artifacts_data_2, _ = clean_eeg(
-        EEGdata_epoched_2, srate, epoch_size, artifact_threshold, refCOV, Eval_2, Evec_2,
-        strict_matlab=True, device=device, dtype=dtype, 
+        EEGdata_epoched_2, 
+        srate, 
+        epoch_size, 
+        artifact_threshold, 
+        refCOV, 
+        Eval_2, 
+        Evec_2,
+        strict_matlab=True, 
+        device=device, 
+        dtype=dtype, 
         skip_checks_and_return_cleaned_only=skip_checks_and_return_cleaned_only,
         verbose_timing=verbose_timing
     )
     if verbose_timing:
         profiling.mark("clean_eeg_2_done")
-    cosine_weights = create_cosine_weights(n_ch, srate, epoch_size, True, device=device, dtype=dtype)
+    cosine_weights = create_cosine_weights(
+        n_ch, 
+        srate, 
+        epoch_size, 
+        True, 
+        device=device, 
+        dtype=dtype
+    )
+    
     if verbose_timing:
         profiling.mark("cosine_weights_ready")
     size_reconstructed_2 = cleaned_data_2.size(1)
@@ -267,15 +306,24 @@ def gedai_per_band(
     if skip_checks_and_return_cleaned_only:
         return cleaned_data, None, None, None
     _, _, SENSAI_score = sensai(
-        EEGdata_epoched, srate, epoch_size, artifact_threshold_out,
-        refCOV, Eval, Evec, 1.0, skip_checks_and_return_cleaned_only=skip_checks_and_return_cleaned_only,
+        EEGdata_epoched, 
+        srate, 
+        epoch_size, 
+        artifact_threshold_out,
+        refCOV, 
+        Eval, 
+        Evec, 
+        noise_multiplier=1.0, 
+        skip_checks_and_return_cleaned_only=skip_checks_and_return_cleaned_only,
+        device=device,
+        dtype=dtype,
         verbose_timing=verbose_timing
     )
     if verbose_timing:
         profiling.mark("sensai_done")
     return cleaned_data, artifacts_data, float(SENSAI_score), float(artifact_threshold_out)
 
-def _batch_cov_optimized(X: torch.Tensor, ddof: int = 1) -> torch.Tensor:
+def _batch_cov_optimized(X: torch.Tensor, ddof: int, dtype) -> torch.Tensor:
     """
     Batched MATLAB-like covariance for X (channels, samples, epochs).
     Returns (channels, channels, epochs).
@@ -286,7 +334,7 @@ def _batch_cov_optimized(X: torch.Tensor, ddof: int = 1) -> torch.Tensor:
     Symmetrizes the covariance matrices to ensure numerical stability. (Rounding errors)
     Return all covariances.
     """
-    X = X.to(dtype=torch.float32)
+    X = X.to(dtype=dtype)
     n_ch, n_samples, n_epochs = X.shape
     if n_samples <= ddof:
         raise ValueError(f"n_samples ({n_samples}) must be > ddof ({ddof})")
@@ -297,7 +345,7 @@ def _batch_cov_optimized(X: torch.Tensor, ddof: int = 1) -> torch.Tensor:
     cov = 0.5 * (cov + cov.transpose(1, 2))
     return cov.permute(1, 2, 0)
 
-def _gevd_chol_batched(A_batch: torch.Tensor, B: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+def _gevd_chol_batched(A_batch: torch.Tensor, B: torch.Tensor, dtype) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     Batched generalized eigendecomposition using Cholesky of B.
     A_batch: (n_ch, n_ch, n_epochs)
@@ -310,8 +358,8 @@ def _gevd_chol_batched(A_batch: torch.Tensor, B: torch.Tensor) -> Tuple[torch.Te
     Adds small jitter if the math breaks and retries.
     """
     n_ch, _, n_epochs = A_batch.shape
-    A_batch = A_batch.to(dtype=torch.float32)
-    B = B.to(dtype=torch.float32)
+    A_batch = A_batch.to(dtype=dtype)
+    B = B.to(dtype=dtype)
     B = 0.5 * (B + B.T)
 
     # Robust Cholesky, handle non-SPD cases without an exception and add jitter only when needed
@@ -340,7 +388,7 @@ def _gevd_chol_batched(A_batch: torch.Tensor, B: torch.Tensor) -> Tuple[torch.Te
     D = torch.diag_embed(w)
     return V.permute(1, 2, 0), D.permute(1, 2, 0)
 
-def _movmean_optimized(x: torch.Tensor, k: int) -> torch.Tensor:
+def _movmean_optimized(x: torch.Tensor, k: int, dtype) -> torch.Tensor:
     """
     Optimized centered moving mean using conv1d.
 
@@ -349,11 +397,11 @@ def _movmean_optimized(x: torch.Tensor, k: int) -> torch.Tensor:
     Makes it more likely to find the true underlying pattern.
     """
     k = int(k)
-    x = x.to(dtype=torch.float32)
+    x = x.to(dtype=dtype)
     n = x.numel()
     if k <= 1 or n == 0:
         return x.clone()
-    kernel = torch.ones(1, 1, k, dtype=torch.float32, device=x.device) / k
+    kernel = torch.ones(1, 1, k, dtype=dtype, device=x.device) / k
     L = (k - 1) // 2
     R = k - L - 1
     x_padded = x.view(1, 1, -1)
@@ -370,7 +418,7 @@ def _movmean_optimized(x: torch.Tensor, k: int) -> torch.Tensor:
         out[i] = x[a:b+1].mean()
     return out
 
-def _findchangepts_mean_optimized(y: torch.Tensor, max_num_changes: int = 2) -> List[int]:
+def _findchangepts_mean_optimized(y: torch.Tensor, max_num_changes: int, dtype) -> List[int]:
     """
     Optimized mean-shift change-point detection.
 
@@ -381,7 +429,7 @@ def _findchangepts_mean_optimized(y: torch.Tensor, max_num_changes: int = 2) -> 
     """
     if max_num_changes != 2:
         raise NotImplementedError("Only max_num_changes=2 is implemented.")
-    y = y.to(dtype=torch.float32).flatten()
+    y = y.to(dtype=dtype).flatten()
     n = y.numel()
     if n <= 1:
         return []
@@ -402,12 +450,12 @@ def _findchangepts_mean_optimized(y: torch.Tensor, max_num_changes: int = 2) -> 
     best1_idx = torch.argmin(costs_1)
     best1 = costs_1[best1_idx].item()
     t1 = best1_idx.item()
-    pref1 = torch.full((n,), float("inf"), dtype=torch.float32)
+    pref1 = torch.full((n,), float("inf"), dtype=dtype)
     pref_arg = torch.full((n,), -1, dtype=torch.long)
     for q in range(1, n - 1):
         s_range = torch.arange(0, q)
-        left_sse_2 = torch.tensor([seg_sse_batch(torch.tensor([0]), torch.tensor([s])).item() for s in s_range], dtype=torch.float32)
-        mid_sse_2 = torch.tensor([seg_sse_batch(torch.tensor([s + 1]), torch.tensor([q])).item() for s in s_range], dtype=torch.float32)
+        left_sse_2 = torch.tensor([seg_sse_batch(torch.tensor([0]), torch.tensor([s])).item() for s in s_range], dtype=dtype)
+        mid_sse_2 = torch.tensor([seg_sse_batch(torch.tensor([s + 1]), torch.tensor([q])).item() for s in s_range], dtype=dtype)
         costs_2 = left_sse_2 + mid_sse_2
         best_idx = torch.argmin(costs_2)
         pref1[q] = costs_2[best_idx]

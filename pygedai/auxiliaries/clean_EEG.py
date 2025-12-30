@@ -13,12 +13,11 @@ def clean_eeg(
     refCOV: Optional[torch.Tensor],
     Eval: torch.Tensor,
     Evec: torch.Tensor,
-    strict_matlab: bool = True,
-    *,
-    device: str | torch.device = "cpu",
-    dtype: torch.dtype = torch.float32,
-    skip_checks_and_return_cleaned_only: bool = False,
-    verbose_timing: bool = False,
+    strict_matlab: bool,
+    device: str,
+    dtype: torch.dtype,
+    skip_checks_and_return_cleaned_only: bool,
+    verbose_timing: bool,
 ) -> Tuple[torch.Tensor, torch.Tensor, float]:
     """
     Clean EEG data using GEDAI methodology.
@@ -52,7 +51,7 @@ def clean_eeg(
     if verbose_timing:
         profiling.mark("clean_eeg_start")
 
-    EEG = EEGdata_epoched
+    EEG = EEGdata_epoched.to(dtype=dtype)
     Ev = Eval
     U = Evec.to(device=device, dtype=dtype)
     
@@ -111,7 +110,14 @@ def clean_eeg(
     half_epoch = epoch_samples // 2
 
     # Cosine weights
-    cw = create_cosine_weights(num_chans, srate, epoch_size, True)
+    cw = create_cosine_weights(
+        num_chans, 
+        srate, 
+        epoch_size, 
+        True,
+        device=device,
+        dtype=dtype
+        )
     cw = cw.to(device=device, dtype=rtype)
     
     # Batching: (E, C, S)
@@ -130,6 +136,7 @@ def clean_eeg(
     # Identify epochs with valid shape for bmm: have at least one kept component and at least 2 samples.
     valid_bmm = (~bad_epochs) & (EEG_batched.shape[-1] > 1)
     cleaned_batched = EEG_batched.clone()
+    
     sol_batched = torch.zeros_like(EEG_batched)
     if valid_bmm.any():
         U_good = U_batched[valid_bmm]

@@ -281,10 +281,22 @@ def gedai(
         broadband_threshold_arg = broadband_threshold_override
 
     cleaned_broadband, _, sensai_broadband, thresh_broadband = gedai_per_band(
-        eeg_ref_proc, sfreq, None, broadband_threshold_arg, epoch_size_used, refCOV=refCOV, refCOV_reg=refCOV_reg, 
-        mean_eval=mean_eval, optimization_type="parabolic", parallel=False,
-        device=device, dtype=dtype, verbose_timing=bool(verbose_timing), TolX=TolX, maxiter=maxiter,
-        skip_checks_and_return_cleaned_only=skip_checks_and_return_cleaned_only
+        eeg_ref_proc, 
+        sfreq, 
+        None, 
+        broadband_threshold_arg, 
+        epoch_size_used, 
+        refCOV=refCOV, 
+        refCOV_reg=refCOV_reg, 
+        mean_eval=mean_eval, 
+        optimization_type="parabolic", 
+        parallel=False,
+        device=device, 
+        dtype=dtype,  
+        TolX=TolX, 
+        maxiter=maxiter,
+        skip_checks_and_return_cleaned_only=skip_checks_and_return_cleaned_only,
+        verbose_timing=bool(verbose_timing),
     )
     if broadband_threshold_override is not None and thresh_broadband is None:
         thresh_broadband = broadband_threshold_override
@@ -359,8 +371,11 @@ def gedai(
                     float(sfreq), 
                     float(epoch_size_used), 
                     refCOV, 
-                    1.0,
-                    verbose_timing=verbose_timing)[0]
+                    NOISE_multiplier=1.0,
+                    device=device,
+                    dtype=dtype,
+                    verbose_timing=verbose_timing
+                )[0]
             )
         except Exception as ex:
             sensai_score = None
@@ -386,6 +401,7 @@ def gedai(
         coeffs,
         max_detail_bands=num_bands_to_process,
         return_smooth=False,
+        dtype=dtype
     )
     if verbose_timing:
         profiling.mark("mra_constructed")
@@ -438,24 +454,42 @@ def gedai(
                 override_missing = True
         if skip_checks_and_return_cleaned_only:
             cleaned_band, _, _, _ = gedai_per_band(
-                band_sig, sfreq, None,
+                band_sig, 
+                sfreq, 
+                None,
                 denoising_strength if threshold_override is None else threshold_override,
-                current_epoch_size, refCOV=refCOV, refCOV_reg=refCOV_reg, 
-                mean_eval=mean_eval, optimization_type="parabolic", parallel=False,
-                device=device, dtype=dtype, verbose_timing=bool(verbose_timing),
+                current_epoch_size, 
+                refCOV=refCOV, 
+                refCOV_reg=refCOV_reg, 
+                mean_eval=mean_eval, 
+                optimization_type="parabolic", 
+                parallel=False,
+                device=device, 
+                dtype=dtype, 
                 skip_checks_and_return_cleaned_only=skip_checks_and_return_cleaned_only,
-                TolX=TolX, maxiter=maxiter
+                TolX=TolX, 
+                maxiter=maxiter,
+                verbose_timing=bool(verbose_timing),
             )
             return band_idx, cleaned_band, None, None
         else:
             cleaned_band, _, s_band, thr_band = gedai_per_band(
-                band_sig, sfreq, None,
+                band_sig, 
+                sfreq, 
+                None,
                 denoising_strength if threshold_override is None else threshold_override,
-                current_epoch_size, refCOV=refCOV, refCOV_reg=refCOV_reg, 
-                mean_eval=mean_eval, optimization_type="parabolic", parallel=False,
-                device=device, dtype=dtype, verbose_timing=bool(verbose_timing),
+                current_epoch_size, 
+                refCOV=refCOV, 
+                refCOV_reg=refCOV_reg, 
+                mean_eval=mean_eval, 
+                optimization_type="parabolic", 
+                parallel=False,
+                device=device, 
+                dtype=dtype, 
                 skip_checks_and_return_cleaned_only=skip_checks_and_return_cleaned_only,
-                TolX=TolX, maxiter=maxiter
+                TolX=TolX, 
+                maxiter=maxiter,
+                verbose_timing=bool(verbose_timing),
             )
             return band_idx, cleaned_band, s_band, thr_band
         
@@ -535,7 +569,9 @@ def gedai(
             float(sfreq),
             float(epoch_size_used),
             refCOV,
-            1.0,
+            NOISE_multiplier=1.0,
+            device=device,
+            dtype=dtype,
             verbose_timing=verbose_timing,
         )
         sensai_score = float(sensai_score_val)
